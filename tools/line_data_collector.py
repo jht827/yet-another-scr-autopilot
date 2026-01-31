@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
+import importlib.util
 import json
 import time
 from collections import deque
@@ -14,7 +16,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-import pygetwindow
 import pytesseract
 from PIL import Image, ImageGrab, ImageOps
 from pynput import keyboard
@@ -87,21 +88,29 @@ def _ocr(image: Image.Image, cfg: FieldConfig) -> str:
     return text.strip()
 
 
-def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
-    if hasattr(pygetwindow, "getWindowsWithTitle"):
-        windows = pygetwindow.getWindowsWithTitle(window_title)
-    elif hasattr(pygetwindow, "getAllWindows"):
-        windows = [
-            window
-            for window in pygetwindow.getAllWindows()
-            if window_title.lower() in window.title.lower()
-        ]
-    else:
+def _load_quartz() -> Any | None:
+    if importlib.util.find_spec("Quartz") is None:
         return None
-    if not windows:
-        raise RuntimeError(f"No window found with title containing '{window_title}'.")
-    window = windows[0]
-    return (window.left, window.top, window.right, window.bottom)
+    return importlib.import_module("Quartz")
+
+
+def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
+    quartz = _load_quartz()
+    if quartz is None:
+        return None
+    options = quartz.kCGWindowListOptionOnScreenOnly | quartz.kCGWindowListExcludeDesktopElements
+    window_list = quartz.CGWindowListCopyWindowInfo(options, quartz.kCGNullWindowID)
+    for window in window_list:
+        window_name = window.get("kCGWindowName", "") or ""
+        owner_name = window.get("kCGWindowOwnerName", "") or ""
+        if window_title.lower() in window_name.lower() or window_title.lower() in owner_name.lower():
+            bounds = window.get("kCGWindowBounds", {})
+            left = int(bounds.get("X", 0))
+            top = int(bounds.get("Y", 0))
+            width = int(bounds.get("Width", 0))
+            height = int(bounds.get("Height", 0))
+            return (left, top, left + width, top + height)
+    raise RuntimeError(f"No window found with title containing '{window_title}'.")
 
 
 def _capture_field(cfg: FieldConfig, window_bbox: tuple[int, int, int, int] | None) -> str:
@@ -135,7 +144,7 @@ def _resolve_window_bbox(config: CollectorConfig) -> tuple[int, int, int, int] |
         return None
     if window_bbox is None:
         _prompt_fullscreen_fallback(
-            "Window lookup unavailable (pygetwindow backend missing).",
+            "Window lookup unavailable (Quartz backend missing).",
         )
     return window_bbox
 

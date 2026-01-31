@@ -51,7 +51,7 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.
-- `pygetwindow` for window-scoped capture.
+- `pyobjc` (Quartz) for window-scoped capture on macOS.
 - `tkinter` for the ROI boxing UI (optional; CLI fallback works without it).
 
 ## Next Steps

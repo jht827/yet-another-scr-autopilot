@@ -4,49 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-import mss
 import numpy as np
 import pytesseract
 from PIL import Image, ImageOps
 
+from scr_autopilot.hud_config import HUD_ROIS, REFERENCE_SIZE, WINDOW_TITLE, HudRois, PixelRoi
 from scr_autopilot.vision import ScreenGrabber, WindowRegion, find_window_region
 
 
-@dataclass(frozen=True)
-class PixelRoi:
-    x: int
-    y: int
-    width: int
-    height: int
-
-
-@dataclass(frozen=True)
-class HudRois:
-    speed: PixelRoi
-    limit: PixelRoi
-    distance: PixelRoi
-
-
-DEFAULT_REFERENCE_SIZE = (1920, 1080)
-DEFAULT_ROIS = HudRois(
-    speed=PixelRoi(x=1002, y=623, width=93, height=49),
-    limit=PixelRoi(x=1016, y=706, width=62, height=37),
-    distance=PixelRoi(x=-13, y=712, width=54, height=21),
-)
-
-
-def resolve_region(args: argparse.Namespace) -> WindowRegion:
-    if args.region:
-        left, top, width, height = (int(part) for part in args.region.split(","))
-        return WindowRegion(left=left, top=top, width=width, height=height)
-    with mss.mss() as sct:
-        monitor = sct.monitors[args.monitor]
-        return WindowRegion(
-            left=int(monitor["left"]),
-            top=int(monitor["top"]),
-            width=int(monitor["width"]),
-            height=int(monitor["height"]),
-        )
+def resolve_region() -> WindowRegion:
+    return find_window_region(WINDOW_TITLE)
 
 
 def debug_log(enabled: bool, message: str) -> None:
@@ -58,12 +25,7 @@ def build_region_provider(
     args: argparse.Namespace,
     log: Callable[[str], None],
 ) -> Callable[[], WindowRegion]:
-    fallback = resolve_region(args)
-    if args.no_window or not args.window_title:
-        log(f"Using fixed region: {fallback}")
-        return lambda: fallback
-
-    last_region = fallback
+    last_region = resolve_region()
     last_error: Optional[str] = None
     last_refresh = 0.0
 
@@ -74,7 +36,7 @@ def build_region_provider(
             return last_region
         last_refresh = now
         try:
-            last_region = find_window_region(args.window_title)
+            last_region = find_window_region(WINDOW_TITLE)
             if last_error:
                 log("Window capture recovered.")
             last_error = None
@@ -84,7 +46,7 @@ def build_region_provider(
                 last_error = str(exc)
         return last_region
 
-    log(f"Attempting to capture window matching '{args.window_title}'.")
+    log(f"Attempting to capture window matching '{WINDOW_TITLE}'.")
     return provider
 
 
@@ -171,16 +133,6 @@ def main() -> None:
         description="Read HUD values from fixed pixel ROIs using Tesseract OCR.",
     )
     parser.add_argument(
-        "--monitor",
-        type=int,
-        default=1,
-        help="Monitor index for capture (used when --region is omitted).",
-    )
-    parser.add_argument(
-        "--region",
-        help="Optional capture region as 'left,top,width,height'.",
-    )
-    parser.add_argument(
         "--interval",
         type=float,
         default=0.05,
@@ -190,21 +142,21 @@ def main() -> None:
         "--speed-roi",
         help=(
             "Absolute ROI for speed as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
         ),
     )
     parser.add_argument(
         "--limit-roi",
         help=(
             "Absolute ROI for speed limit as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
         ),
     )
     parser.add_argument(
         "--distance-roi",
         help=(
             "Absolute ROI for next-station distance as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
         ),
     )
     parser.add_argument(
@@ -247,20 +199,10 @@ def main() -> None:
         help="Tesseract OCR engine mode (OEM).",
     )
     parser.add_argument(
-        "--window-title",
-        default="Roblox",
-        help="Window title/owner hint to capture (default: Roblox).",
-    )
-    parser.add_argument(
-        "--no-window",
-        action="store_true",
-        help="Disable window capture and use monitor/region instead.",
-    )
-    parser.add_argument(
         "--window-refresh",
         type=float,
         default=1.0,
-        help="Seconds between window region refreshes when using --window-title.",
+        help="Seconds between window region refreshes when tracking the Roblox window.",
     )
     parser.add_argument(
         "--debug",
@@ -270,7 +212,8 @@ def main() -> None:
     parser.add_argument(
         "--debug-dir",
         type=Path,
-        help="Optional folder to dump a full frame + ROI crops for debugging.",
+        default=Path("hud_debug"),
+        help="Folder to dump a full frame + ROI crops for debugging.",
     )
     args = parser.parse_args()
 
@@ -278,9 +221,9 @@ def main() -> None:
     args.threshold = threshold
 
     rois = HudRois(
-        speed=parse_roi(args.speed_roi, DEFAULT_ROIS.speed),
-        limit=parse_roi(args.limit_roi, DEFAULT_ROIS.limit),
-        distance=parse_roi(args.distance_roi, DEFAULT_ROIS.distance),
+        speed=parse_roi(args.speed_roi, HUD_ROIS.speed),
+        limit=parse_roi(args.limit_roi, HUD_ROIS.limit),
+        distance=parse_roi(args.distance_roi, HUD_ROIS.distance),
     )
 
     log = lambda message: debug_log(args.debug, message)

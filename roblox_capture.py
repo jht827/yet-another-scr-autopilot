@@ -5,6 +5,7 @@ from typing import Optional
 
 import cv2
 
+from scr_autopilot.hud_config import PixelRoi, WINDOW_TITLE, format_roi
 from scr_autopilot.vision import ScreenGrabber, WindowRegion, select_roi
 
 try:
@@ -57,8 +58,10 @@ def capture_loop(title_hint: str, show_preview: bool) -> None:
         key = cv2.waitKey(1) & 0xFF
         if key == ord("b"):
             selection = select_roi(frame, region_provider(title_hint))
+            x, y, w, h = selection.roi
             print("Absolute ROI:", selection.roi)
             print("Normalized ROI:", selection.normalized)
+            print("HUD config snippet:", format_roi(PixelRoi(x=x, y=y, width=w, height=h)))
         elif key == ord("q"):
             break
         time.sleep(0.005)
@@ -68,7 +71,11 @@ def capture_loop(title_hint: str, show_preview: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Capture Roblox window and select HUD ROI.")
-    parser.add_argument("--title", default="Roblox", help="Window title/owner hint to match.")
+    parser.add_argument(
+        "--title",
+        default=WINDOW_TITLE,
+        help="Window title/owner hint to match.",
+    )
     parser.add_argument("--no-preview", action="store_true", help="Disable live preview window.")
     args = parser.parse_args()
     capture_loop(args.title, show_preview=not args.no_preview)

@@ -32,5 +32,5 @@ SINGLE_DIGIT_SPEED_IF_PREV_HIGH = 80  # Reject single digit if previous >= this.
 SINGLE_DIGIT_CONFIRM_FRAMES = 2  # Accept single digit only after N repeats.
 
 # Correction backoff
-MAX_SPEED_REJECT_FRAMES = 6  # Allow realtime speed after too many rejections.
-MAX_DISTANCE_REJECT_FRAMES = 6  # Allow realtime distance after too many rejections.
+MAX_SPEED_REJECT_FRAMES = 4  # Allow realtime speed after too many rejections.
+MAX_DISTANCE_REJECT_FRAMES = 2  # Allow realtime distance after too many rejections.

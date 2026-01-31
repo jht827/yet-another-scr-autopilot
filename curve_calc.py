@@ -2,7 +2,12 @@ import csv
 from functools import lru_cache
 from statistics import mean
 
-from config import DECEL_CURVE_PATH, CURVE_SMOOTHING_WINDOW, MPH_TO_MPS, DISTANCE_ADJUST_M
+from config import (
+    DECEL_CURVE_PATH,
+    CURVE_SMOOTHING_WINDOW,
+    DISTANCE_ADJUST_MI,
+    MPH_TO_MILES_PER_SEC,
+)
 
 
 def _smooth_series(values, window):
@@ -41,14 +46,16 @@ def _load_decel_curve():
         if dt <= 0:
             distances.append(distances[-1])
             continue
-        avg_speed_mps = (speeds_mph[idx] + speeds_mph[idx - 1]) * 0.5 * MPH_TO_MPS
-        distances.append(distances[-1] + avg_speed_mps * dt)
+        avg_speed_miles_per_sec = (
+            (speeds_mph[idx] + speeds_mph[idx - 1]) * 0.5 * MPH_TO_MILES_PER_SEC
+        )
+        distances.append(distances[-1] + avg_speed_miles_per_sec * dt)
 
     total_distance = distances[-1]
     speed_distance_pairs = []
     for speed, distance_travelled in zip(speeds_mph, distances):
         distance_remaining = max(total_distance - distance_travelled, 0.0)
-        speed_distance_pairs.append((speed * MPH_TO_MPS, distance_remaining))
+        speed_distance_pairs.append((speed, distance_remaining))
 
     speed_distance_pairs.sort(key=lambda pair: pair[0])
 
@@ -72,23 +79,23 @@ def _load_decel_curve():
     return speeds_sorted, distances_sorted
 
 
-def braking_distance(speed_mps, distance_adjust_m=DISTANCE_ADJUST_M):
+def braking_distance(speed_mph, distance_adjust_mi=DISTANCE_ADJUST_MI):
     speeds, distances = _load_decel_curve()
-    if speed_mps <= speeds[0]:
-        return max(distances[0] + distance_adjust_m, 0.0)
-    if speed_mps >= speeds[-1]:
-        return max(distances[-1] + distance_adjust_m, 0.0)
+    if speed_mph <= speeds[0]:
+        return max(distances[0] + distance_adjust_mi, 0.0)
+    if speed_mph >= speeds[-1]:
+        return max(distances[-1] + distance_adjust_mi, 0.0)
 
     lo = 0
     hi = len(speeds) - 1
     while lo <= hi:
         mid = (lo + hi) // 2
-        if speeds[mid] < speed_mps:
+        if speeds[mid] < speed_mph:
             lo = mid + 1
-        elif speeds[mid] > speed_mps:
+        elif speeds[mid] > speed_mph:
             hi = mid - 1
         else:
-            return max(distances[mid] + distance_adjust_m, 0.0)
+            return max(distances[mid] + distance_adjust_mi, 0.0)
 
     upper = lo
     lower = lo - 1
@@ -100,7 +107,7 @@ def braking_distance(speed_mps, distance_adjust_m=DISTANCE_ADJUST_M):
     if speed_high == speed_low:
         interpolated = dist_low
     else:
-        ratio = (speed_mps - speed_low) / (speed_high - speed_low)
+        ratio = (speed_mph - speed_low) / (speed_high - speed_low)
         interpolated = dist_low + ratio * (dist_high - dist_low)
 
-    return max(interpolated + distance_adjust_m, 0.0)
+    return max(interpolated + distance_adjust_mi, 0.0)

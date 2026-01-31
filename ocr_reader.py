@@ -1,7 +1,5 @@
 import pytesseract
-from PIL import ImageGrab
-import numpy as np
-import cv2
+from PIL import Image, ImageGrab, ImageOps
 import time
 import re
 import pyautogui
@@ -9,39 +7,64 @@ from pynput.keyboard import Controller
 
 from config import REGION_DOOR_STATUS, REGION_SELECT_DESTINATION, SELECT_DESTINATION_INTERVAL
 
+# OCR settings borrowed from discarded/old logic
+TESSERACT_SCALE = 2.0
+TESSERACT_THRESHOLD = 160
+TESSERACT_INVERT = False
+TESSERACT_LANG = "eng"
+TESSERACT_PSM = 7
+TESSERACT_OEM = 1
+
+NUMERIC_WHITELIST = "0123456789"
+
+
+def grab_fullscreen():
+    return ImageGrab.grab()
+
+
+def crop_region(frame: Image.Image, region):
+    return frame.crop(region)
+
+
+def preprocess_for_tesseract(image: Image.Image):
+    if TESSERACT_SCALE != 1.0:
+        width = max(1, int(image.width * TESSERACT_SCALE))
+        height = max(1, int(image.height * TESSERACT_SCALE))
+        image = image.resize((width, height), Image.BILINEAR)
+    gray = ImageOps.autocontrast(image.convert("L"))
+    if TESSERACT_THRESHOLD is not None:
+        gray = gray.point(lambda p: 255 if p > TESSERACT_THRESHOLD else 0)
+    if TESSERACT_INVERT:
+        gray = ImageOps.invert(gray)
+    return gray
+
+
 # 通用 OCR 读取函数
-def read_number_raw(region):
-    img = ImageGrab.grab(bbox=region)
-    img_np = np.array(img)
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
-    config = '--psm 7 -c tessedit_char_whitelist=0123456789O.'
-    text = pytesseract.image_to_string(thresh, config=config).strip()
+def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST):
+    img = crop_region(frame, region) if frame is not None else ImageGrab.grab(bbox=region)
+    processed = preprocess_for_tesseract(img)
+    config = f"--psm {TESSERACT_PSM} --oem {TESSERACT_OEM} -c tessedit_char_whitelist={whitelist}"
+    text = pytesseract.image_to_string(processed, config=config, lang=TESSERACT_LANG).strip()
 
-    text = text.replace('O', '0').replace('o', '0').replace(',', '.').replace('..', '.')
+    text = text.replace("O", "0").replace("o", "0")
+    digits = "".join(c for c in text if c.isdigit())
 
-    try:
-        return text
-    except:
-        print(f"[x] OCR failed: '{text}'")
-        return None
+    return digits if digits else None
 
 
 last_speed = None
 last_speed_time = 0
 
 
-def read_speed(region):
+def read_speed(region, frame=None):
     global last_speed, last_speed_time
-    raw_text = read_number_raw(region)
-    if raw_text is None:
-        return None
+    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST)
 
     try:
-        value = float(raw_text)
+        value = float(raw_text) if raw_text is not None else None
     except:
-        print(f"[x] Failed to parse speed: '{raw_text}'")
+        return None
+    if value is None:
         return None
 
     now = time.time()
@@ -49,11 +72,9 @@ def read_speed(region):
     # Correction logic for probable OCR truncation
     if last_speed is not None and last_speed >= 60 and value < 10 and (now - last_speed_time) < 1.5:
         corrected = float(f"7{int(value)}")
-        print(f"[~] Corrected likely misread: {value} → {corrected} (based on previous {last_speed:.1f})")
         value = corrected
 
     if not (0 <= value <= 120):
-        print(f"[x] Speed out of range: {value}")
         return None
 
     last_speed = value
@@ -61,66 +82,46 @@ def read_speed(region):
     return value
 
 
-distance_history = []
-
-
-def read_distance(region):
-    global distance_history
-    raw_text = read_number_raw(region)
+def read_distance(region, frame=None):
+    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST)
     if raw_text is None:
         return None
-
-    digits_only = ''.join(c for c in raw_text if c.isdigit())
-    corrected = None
-
-    if len(digits_only) == 3:
-        corrected = float(f"{digits_only[0]}.{digits_only[1:]}")
-        print(f"[~] Corrected 3-digit '{digits_only}' -> '{corrected}'")
-    elif len(digits_only) == 2:
-        corrected = float(f"0.{digits_only}")
-        print(f"[~] Corrected 2-digit '{digits_only}' -> '{corrected}'")
-    else:
-        try:
-            corrected = float(raw_text)
-        except:
-            print(f"[x] Failed to parse number: '{raw_text}'")
-            return None
-
-    distance_history.append(corrected)
-    if len(distance_history) > 5:
-        distance_history.pop(0)
-    if len(distance_history) < 3:
-        return corrected
-    median = sorted(distance_history)[len(distance_history) // 2]
-    if abs(corrected - median) > 0.2:
-        print(f"[x] Distance jump: {corrected:.3f} vs median {median:.3f} — discarded")
+    try:
+        return int(raw_text) / 100
+    except ValueError:
         return None
-    return corrected
 
 
-def should_press_door_keys():
-    img = ImageGrab.grab(bbox=REGION_DOOR_STATUS)
-    text = pytesseract.image_to_string(img, config='--psm 6').strip().lower()
+def should_press_door_keys(frame=None):
+    img = crop_region(frame, REGION_DOOR_STATUS) if frame is not None else ImageGrab.grab(bbox=REGION_DOOR_STATUS)
+    text = pytesseract.image_to_string(
+        img,
+        config=f"--psm 6 --oem {TESSERACT_OEM}",
+        lang=TESSERACT_LANG,
+    ).strip().lower()
     clean_text = re.sub(r'[^a-z ]', '', text)  # remove numbers/symbols
 
     if "door" in clean_text and "closed" in clean_text:
-        print(f"[✓] Detected 'Door Closed' in: '{text}'")
         return True
-    else:
-        print(f"[x] 'Door Closed' not detected: '{text}'")
-        return False
+    return False
 
 
 last_select_check_time = 0
 
 
-def check_select_destination_trigger(now, interval=SELECT_DESTINATION_INTERVAL):
+def check_select_destination_trigger(now, interval=SELECT_DESTINATION_INTERVAL, frame=None):
     global last_select_check_time
     if now - last_select_check_time < interval:
         return
 
-    img = ImageGrab.grab(bbox=REGION_SELECT_DESTINATION)
-    text = pytesseract.image_to_string(img, config='--psm 6').strip().lower()
+    img = crop_region(frame, REGION_SELECT_DESTINATION) if frame is not None else ImageGrab.grab(
+        bbox=REGION_SELECT_DESTINATION
+    )
+    text = pytesseract.image_to_string(
+        img,
+        config=f"--psm 6 --oem {TESSERACT_OEM}",
+        lang=TESSERACT_LANG,
+    ).strip().lower()
 
     if "select destination" in text:
         print("[✓] 'Select Destination' detected — running full sequence")
@@ -165,8 +166,5 @@ def check_select_destination_trigger(now, interval=SELECT_DESTINATION_INTERVAL):
         keyboard.release('o')
         # Final click 1964,1379
         pyautogui.click(x=1964, y=1379)
-
-    else:
-        print("[ ] 'Select Destination' not detected")
 
     last_select_check_time = now

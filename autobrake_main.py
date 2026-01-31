@@ -3,20 +3,25 @@
 import time
 from pynput.keyboard import Listener, Controller
 from brake_control import issue_brake, release_brake_keys
-from ocr_reader import read_speed, read_distance, should_press_door_keys, check_select_destination_trigger
+from ocr_reader import (
+    check_select_destination_trigger,
+    grab_fullscreen,
+    read_distance,
+    read_speed,
+    should_press_door_keys,
+)
 
 from curve_calc import braking_distance
 from config import (
     REGION_SPEED,
     REGION_MILES,
-    MPH_TO_MPS,
-    MILES_TO_METERS,
     COOLDOWN,
     TQ_PRESS_INTERVAL,
     W_PRESS_COOLDOWN,
     STOPPED_W_PRESS_DELAY,
     STOPPED_W_PRESS_DURATION,
     DOOR_KEY_PRESS_DURATION,
+    LOOP_INTERVAL,
 )
 
 # State
@@ -49,11 +54,12 @@ try:
     while True:
         now = time.time()
 
-        check_select_destination_trigger(now)
+        frame = grab_fullscreen()
+
+        check_select_destination_trigger(now, frame=frame)
 
         # Smash T and Q every 1 second
         if now - last_keypress_time > TQ_PRESS_INTERVAL:
-            print("[TQ] Pressing T and Q")
             keyboard.press('t')
             keyboard.release('t')
             keyboard.press('q')
@@ -61,8 +67,7 @@ try:
             last_keypress_time = now
 
         # Check for 'Door Closed'
-        if should_press_door_keys():
-            print("[!] 'Door Closed' detected — pressing W + D for 2s")
+        if should_press_door_keys(frame=frame):
             keyboard.press('w')
             keyboard.press('d')
             time.sleep(DOOR_KEY_PRESS_DURATION)
@@ -70,7 +75,7 @@ try:
             keyboard.release('d')
 
         # Speed check
-        speed_mph = read_speed(REGION_SPEED)
+        speed_mph = read_speed(REGION_SPEED, frame=frame)
         if speed_mph is None:
             # Assume unreadable speed is 0
             speed_mph = 0.0
@@ -84,7 +89,6 @@ try:
             and (now - last_nonzero_speed_time > STOPPED_W_PRESS_DELAY)
             and (now - last_w_press_time > W_PRESS_COOLDOWN)
         ):
-            print("[W] Speed 0 for 30s — pressing W for 2.5s")
             keyboard.press('w')
             time.sleep(STOPPED_W_PRESS_DURATION)
             keyboard.release('w')
@@ -92,31 +96,33 @@ try:
 
         if brake_disabled and speed_mph < 1:
             brake_disabled = False
-            print("[✓] Train stopped. Auto-brake auto rearmed.")
 
         if brake_disabled:
-            print("[⛔] Auto-brake disabled. Waiting...")
-            time.sleep(0.5)
+            time.sleep(LOOP_INTERVAL)
             continue
 
         # Distance check
-        distance_miles = read_distance(REGION_MILES)
+        distance_miles = read_distance(REGION_MILES, frame=frame)
         if distance_miles is None:
-            time.sleep(0.5)
+            time.sleep(LOOP_INTERVAL)
             continue
 
-        speed_mps = speed_mph * MPH_TO_MPS
-        distance_m = distance_miles * MILES_TO_METERS
-        required_m = braking_distance(speed_mps)
+        required_miles = braking_distance(speed_mph)
 
-        print(f"Speed: {speed_mph:.1f} mph | Dist: {distance_miles:.3f} mi | Req: {required_m:.1f} m")
+        status_line = (
+            f"Speed: {speed_mph:5.1f} mph | Dist: {distance_miles:6.3f} mi | "
+            f"Req: {required_miles:6.3f} mi"
+        )
+        print(f"\r{status_line}", end="", flush=True)
 
-        if distance_m < required_m and (now - last_trigger_time) > COOLDOWN:
+        if distance_miles < required_miles and (now - last_trigger_time) > COOLDOWN:
+            print()
             issue_brake()
             last_trigger_time = now
 
-        time.sleep(0.5)
+        time.sleep(LOOP_INTERVAL)
 except KeyboardInterrupt:
+    print()
     print("Stopped. Cleaning up...")
     release_brake_keys()
     listener.stop()

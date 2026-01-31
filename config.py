@@ -9,8 +9,7 @@ REGION_DOOR_STATUS = (1223, 13, 1335, 31)
 REGION_SELECT_DESTINATION = (676, 57, 854, 80)
 
 # Unit conversion
-MPH_TO_MPS = 0.44704
-MILES_TO_METERS = 1609.34
+MPH_TO_MILES_PER_SEC = 1 / 3600
 
 # Timing and input
 COOLDOWN = 3.0
@@ -24,8 +23,11 @@ DOOR_KEY_PRESS_DURATION = 2.0
 DECEL_CURVE_PATH = BASE_DIR / "class_357_decel.csv.csv"
 CURVE_SMOOTHING_WINDOW = 5
 
-# Additive distance adjustment (meters) to compensate for short-stop bias
-DISTANCE_ADJUST_M = 0.0
+# Additive distance adjustment (miles) to compensate for short-stop bias
+DISTANCE_ADJUST_MI = 0.0
+
+# Main loop interval (seconds)
+LOOP_INTERVAL = 0.2
 
 # Select Destination automation
 SELECT_DESTINATION_INTERVAL = 60

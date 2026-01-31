@@ -3,8 +3,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 # Screen regions
-REGION_SPEED = (804, 1350, 860, 1379)
-REGION_MILES = (1168, 1388, 1225, 1409)
+REGION_SPEED = (2144, 1310, 2206, 1341)
+REGION_MILES = (180, 1378, 222, 1393)
 REGION_DOOR_STATUS = (1223, 13, 1335, 31)
 REGION_SELECT_DESTINATION = (676, 57, 854, 80)
 

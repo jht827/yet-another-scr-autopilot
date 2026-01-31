@@ -7,14 +7,11 @@ keyboard = Controller()
 def issue_brake():
     print("[!] BRAKE NOW — Pressing A + S for 1.5s")
     try:
-        keyboard.press('e')
-      #  keyboard.press('s')
-        time.sleep(2.1)
+        keyboard.press('s')
+        time.sleep(4.5)
     finally:
-        keyboard.release('e')
-     #   keyboard.release('s')
+        keyboard.release('s')
         print("[✓] Released A + S")
 
 def release_brake_keys():
-    keyboard.release('a')
     keyboard.release('s')

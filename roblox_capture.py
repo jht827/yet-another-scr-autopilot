@@ -1,10 +1,12 @@
 import argparse
 import os
 import time
+from pathlib import Path
 from typing import Optional
 
 import cv2
 
+from scr_autopilot.config import load_config
 from scr_autopilot.hud_config import PixelRoi, WINDOW_TITLE, format_roi
 from scr_autopilot.vision import ScreenGrabber, WindowRegion, select_roi
 
@@ -72,13 +74,21 @@ def capture_loop(title_hint: str, show_preview: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Capture Roblox window and select HUD ROI.")
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the central scr_autopilot.toml config file.",
+    )
+    parser.add_argument(
         "--title",
-        default=WINDOW_TITLE,
+        default=None,
         help="Window title/owner hint to match.",
     )
     parser.add_argument("--no-preview", action="store_true", help="Disable live preview window.")
     args = parser.parse_args()
-    capture_loop(args.title, show_preview=not args.no_preview)
+    config = load_config(Path(args.config) if args.config else None)
+    title_hint = args.title or config.window.title or WINDOW_TITLE
+    capture_loop(title_hint, show_preview=not args.no_preview)
 
 
 if __name__ == "__main__":

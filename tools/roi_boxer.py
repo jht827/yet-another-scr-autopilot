@@ -13,7 +13,7 @@ import pygetwindow
 from PIL import ImageGrab
 
 
-def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
+def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
     if hasattr(pygetwindow, "getWindowsWithTitle"):
         windows = pygetwindow.getWindowsWithTitle(window_title)
     elif hasattr(pygetwindow, "getAllWindows"):
@@ -23,9 +23,7 @@ def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
             if window_title.lower() in window.title.lower()
         ]
     else:
-        raise RuntimeError(
-            "pygetwindow does not expose window lookup helpers on this platform.",
-        )
+        return None
     if not windows:
         raise RuntimeError(f"No window found with title containing '{window_title}'.")
     window = windows[0]
@@ -44,12 +42,26 @@ def _tk_available() -> bool:
     return importlib.util.find_spec("tkinter") is not None
 
 
+def _get_fullscreen_bbox() -> tuple[int, int, int, int]:
+    image = ImageGrab.grab()
+    return (0, 0, image.width, image.height)
+
+
 class RoiBoxer:
     def __init__(self, config_path: Path) -> None:
         self.config_path = config_path
         self.config = _load_config(config_path)
         self.window_title = self.config.get("window_title", "Roblox")
         self.window_bbox = _get_window_bbox(self.window_title)
+        if self.window_bbox is None:
+            self.window_bbox = self._fallback_bbox()
+
+    def _fallback_bbox(self) -> tuple[int, int, int, int]:
+        window_bbox = self.config.get("window_bbox")
+        if window_bbox:
+            return tuple(window_bbox)
+        print("Warning: window lookup unavailable. Using fullscreen coordinates.")
+        return _get_fullscreen_bbox()
 
     def run_gui(self) -> None:
         tkinter = importlib.import_module("tkinter")

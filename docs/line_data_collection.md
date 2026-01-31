@@ -41,6 +41,7 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 - `whitelist` limits OCR characters for speed and stability.
 - `window_title` must match the Roblox window title so capture is scoped to that window.
   The matcher looks for the title as a substring (case-insensitive).
+- `window_bbox` can be set manually as `[left, top, right, bottom]` if window lookup fails.
 
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.

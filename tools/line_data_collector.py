@@ -32,6 +32,7 @@ class FieldConfig:
 class CollectorConfig:
     fields: dict[str, FieldConfig] = field(default_factory=dict)
     window_title: str = "Roblox"
+    window_bbox: tuple[int, int, int, int] | None = None
     poll_hz: float = 2.0
     watch_fields: tuple[str, ...] = ("signal_id", "next_stop", "platform")
 
@@ -49,9 +50,12 @@ def _load_config(path: Path) -> CollectorConfig:
             threshold=cfg.get("threshold"),
             invert=bool(cfg.get("invert", False)),
         )
+    window_bbox = raw.get("window_bbox")
+    window_bbox_tuple = tuple(window_bbox) if window_bbox else None
     return CollectorConfig(
         fields=fields,
         window_title=raw.get("window_title", "Roblox"),
+        window_bbox=window_bbox_tuple,
         poll_hz=float(raw.get("poll_hz", 2.0)),
         watch_fields=tuple(raw.get("watch_fields", ["signal_id", "next_stop", "platform"])),
     )
@@ -80,7 +84,7 @@ def _ocr(image: Image.Image, cfg: FieldConfig) -> str:
     return text.strip()
 
 
-def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
+def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
     if hasattr(pygetwindow, "getWindowsWithTitle"):
         windows = pygetwindow.getWindowsWithTitle(window_title)
     elif hasattr(pygetwindow, "getAllWindows"):
@@ -90,19 +94,20 @@ def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
             if window_title.lower() in window.title.lower()
         ]
     else:
-        raise RuntimeError(
-            "pygetwindow does not expose window lookup helpers on this platform.",
-        )
+        return None
     if not windows:
         raise RuntimeError(f"No window found with title containing '{window_title}'.")
     window = windows[0]
     return (window.left, window.top, window.right, window.bottom)
 
 
-def _capture_field(cfg: FieldConfig, window_bbox: tuple[int, int, int, int]) -> str:
-    left, top, _, _ = window_bbox
+def _capture_field(cfg: FieldConfig, window_bbox: tuple[int, int, int, int] | None) -> str:
     x1, y1, x2, y2 = cfg.roi
-    image = ImageGrab.grab(bbox=(left + x1, top + y1, left + x2, top + y2))
+    if window_bbox is None:
+        image = ImageGrab.grab(bbox=(x1, y1, x2, y2))
+    else:
+        left, top, _, _ = window_bbox
+        image = ImageGrab.grab(bbox=(left + x1, top + y1, left + x2, top + y2))
     image = _preprocess(image, cfg)
     return _ocr(image, cfg)
 
@@ -148,7 +153,11 @@ def collect(config_path: Path, output_path: Path) -> None:
     distance_m = 0.0
     last_values: dict[str, str] = {}
 
-    window_bbox = _get_window_bbox(config.window_title)
+    window_bbox = config.window_bbox or _get_window_bbox(config.window_title)
+    if window_bbox is None:
+        print(
+            "Warning: window lookup unavailable. Using absolute screen coordinates.",
+        )
 
     with output_path.open("w", newline="") as handle:
         fieldnames = [

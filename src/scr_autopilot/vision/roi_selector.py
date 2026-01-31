@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from scr_autopilot.vision.screen_capture import NormalizedRoi, WindowRegion, roi_to_normalized
+from .screen_capture import NormalizedRoi, WindowRegion, roi_to_normalized
 
 
 @dataclass(frozen=True)

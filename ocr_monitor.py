@@ -10,6 +10,7 @@ import pytesseract
 from PIL import Image, ImageChops, ImageOps
 
 import ocr_config
+from ocr_corrections import DistanceState, SpeedState, apply_distance_correction, apply_speed_correction
 
 
 @dataclass(frozen=True)
@@ -20,12 +21,9 @@ class Regions:
 
 @dataclass
 class CorrectionState:
-    last_speed_value: int | None = None
-    last_miles_value: int | None = None
+    speed: SpeedState
+    distance: DistanceState
     stop_start: float | None = None
-    single_digit_streak: int = 0
-    speed_reject_streak: int = 0
-    miles_reject_streak: int = 0
 
 
 @dataclass
@@ -37,6 +35,7 @@ class StatusState:
     fps_timer: float = 0.0
     frame_count: int = 0
     fps: float = 0.0
+
 
 def _apply_ocr_settings() -> None:
     if ocr_config.TESSERACT_CMD:
@@ -73,26 +72,6 @@ def _read_digits(image: Image.Image) -> str:
     return "".join(ch for ch in text if ch.isdigit())
 
 
-def _parse_int(text: str) -> int | None:
-    if not text:
-        return None
-    try:
-        return int(text)
-    except ValueError:
-        return None
-
-
-def _digits_only(text: str) -> str:
-    return "".join(ch for ch in text if ch.isdigit())
-
-
-def _clamp_distance_digits(text: str) -> str:
-    digits = _digits_only(text)
-    if len(digits) <= ocr_config.MAX_DISTANCE_DIGITS:
-        return digits
-    return digits[: ocr_config.MAX_DISTANCE_DIGITS]
-
-
 def _is_stopped(speed_value: int | None) -> bool:
     return speed_value is not None and speed_value <= ocr_config.STOP_SPEED_THRESHOLD
 
@@ -124,80 +103,6 @@ def _update_stop_timer(state: CorrectionState, speed_value: int | None, now: flo
         state.stop_start = None
 
 
-def _apply_speed_correction(
-    raw_speed: str,
-    state: CorrectionState,
-    delta_t: float,
-) -> int | None:
-    speed_value = _parse_int(raw_speed)
-    if speed_value is None:
-        return None
-
-    if state.last_speed_value is not None:
-        max_delta = ocr_config.MAX_SPEED_DELTA_PER_SEC * delta_t
-        if abs(speed_value - state.last_speed_value) > max_delta:
-            speed_value = state.last_speed_value
-            state.speed_reject_streak += 1
-        else:
-            state.speed_reject_streak = 0
-
-    if (
-        state.last_speed_value is not None
-        and state.last_speed_value >= ocr_config.SINGLE_DIGIT_SPEED_IF_PREV_HIGH
-    ):
-        if speed_value < 10:
-            state.single_digit_streak += 1
-            if state.single_digit_streak < ocr_config.SINGLE_DIGIT_CONFIRM_FRAMES:
-                speed_value = state.last_speed_value
-                state.speed_reject_streak += 1
-        else:
-            state.single_digit_streak = 0
-            state.speed_reject_streak = 0
-    else:
-        state.single_digit_streak = 0
-
-    if state.speed_reject_streak >= ocr_config.MAX_SPEED_REJECT_FRAMES:
-        state.speed_reject_streak = 0
-        return _parse_int(raw_speed)
-
-    return speed_value
-
-
-def _apply_miles_correction(
-    raw_miles: str,
-    state: CorrectionState,
-    delta_t: float,
-    now: float,
-) -> int | None:
-    miles_digits = _clamp_distance_digits(raw_miles)
-    miles_value = _parse_int(miles_digits)
-    if miles_value is None:
-        return None
-
-    if state.last_miles_value is not None:
-        max_drop = ocr_config.MAX_DISTANCE_DROP_PER_SEC * delta_t
-        max_rise = ocr_config.MAX_DISTANCE_RISE_PER_SEC * delta_t
-        delta = miles_value - state.last_miles_value
-        allow_reset = (
-            state.stop_start is not None
-            and (now - state.stop_start) >= ocr_config.MIN_SPEED_STABLE_FOR_RESET_SEC
-        )
-        if delta > max_rise and not allow_reset:
-            miles_value = state.last_miles_value
-            state.miles_reject_streak += 1
-        elif delta < -max_drop and not allow_reset:
-            miles_value = state.last_miles_value
-            state.miles_reject_streak += 1
-        else:
-            state.miles_reject_streak = 0
-
-    if state.miles_reject_streak >= ocr_config.MAX_DISTANCE_REJECT_FRAMES:
-        state.miles_reject_streak = 0
-        return _parse_int(miles_digits)
-
-    return miles_value
-
-
 def _format_output(speed_value: int | None, miles_value: int | None) -> tuple[str, str]:
     speed = f"{speed_value}" if speed_value is not None else ""
     miles = f"{miles_value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if miles_value is not None else ""
@@ -227,12 +132,19 @@ def _should_print(
         or time_since_status >= ocr_config.STATUS_EVERY_SECONDS
     )
 
+
+def _allow_distance_reset(state: CorrectionState, now: float) -> bool:
+    return state.stop_start is not None and (
+        now - state.stop_start
+    ) >= ocr_config.MIN_SPEED_STABLE_FOR_RESET_SEC
+
+
 def main() -> None:
     _apply_ocr_settings()
     regions = Regions(speed=ocr_config.REGION_SPEED, miles=ocr_config.REGION_MILES)
 
     target_frame_time = 1.0 / max(1, ocr_config.TARGET_FPS)
-    correction_state = CorrectionState()
+    correction_state = CorrectionState(speed=SpeedState(), distance=DistanceState())
     status_state = StatusState(last_update=time.perf_counter(), fps_timer=time.perf_counter())
 
     with mss.mss() as sct:
@@ -246,14 +158,21 @@ def main() -> None:
             delta_t = max(0.001, now - status_state.last_update)
             status_state.last_update = now
 
-            speed_value = _apply_speed_correction(raw_speed, correction_state, delta_t)
+            speed_value = apply_speed_correction(raw_speed, correction_state.speed, delta_t)
             _update_stop_timer(correction_state, speed_value, now)
-            miles_value = _apply_miles_correction(raw_miles, correction_state, delta_t, now)
+            allow_reset = _allow_distance_reset(correction_state, now)
+            miles_value = apply_distance_correction(
+                raw_miles,
+                correction_state.distance,
+                speed_value,
+                delta_t,
+                allow_reset,
+            )
 
             if speed_value is not None:
-                correction_state.last_speed_value = speed_value
+                correction_state.speed.last_speed_value = speed_value
             if miles_value is not None:
-                correction_state.last_miles_value = miles_value
+                correction_state.distance.last_miles_value = miles_value
 
             speed, miles = _format_output(speed_value, miles_value)
             _update_fps(status_state, now)

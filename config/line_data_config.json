@@ -1,0 +1,48 @@
+{
+  "window_title": "Roblox",
+  "window_bbox": null,
+  "poll_hz": 2,
+  "watch_fields": ["signal_id", "next_stop", "platform"],
+  "fields": {
+    "speed": {
+      "roi": [804, 1350, 860, 1379],
+      "psm": 7,
+      "whitelist": "0123456789.",
+      "scale": 2,
+      "threshold": 160
+    },
+    "speed_limit": {
+      "roi": [900, 1350, 960, 1379],
+      "psm": 7,
+      "whitelist": "0123456789.",
+      "scale": 2,
+      "threshold": 160
+    },
+    "signal_id": {
+      "roi": [1020, 1330, 1120, 1365],
+      "psm": 7,
+      "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "scale": 2,
+      "threshold": 160
+    },
+    "next_stop": {
+      "roi": [1200, 60, 1500, 95],
+      "psm": 7,
+      "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ",
+      "scale": 2
+    },
+    "platform": {
+      "roi": [1200, 95, 1500, 130],
+      "psm": 7,
+      "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ",
+      "scale": 2
+    },
+    "distance_to_next_station": {
+      "roi": [1168, 1388, 1225, 1409],
+      "psm": 7,
+      "whitelist": "0123456789.",
+      "scale": 2,
+      "threshold": 160
+    }
+  }
+}

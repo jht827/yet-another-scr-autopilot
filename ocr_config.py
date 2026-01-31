@@ -29,6 +29,7 @@ RED_THRESHOLD = 40  # Higher means stricter red detection.
 
 # OCR cleanup heuristics
 MAX_DISTANCE_DIGITS = 3  # Distance should be 3 digits (e.g., 061).
+DISTANCE_DIVISOR = 100.0  # Divide OCR distance digits by this factor for HUD units.
 
 MIN_SPEED_STABLE_FOR_RESET_SEC = 10.0  # Allow distance reset after prolonged stop.
 STOP_SPEED_THRESHOLD = 1  # Consider stopped if speed <= this value.
@@ -52,7 +53,7 @@ MAX_DISTANCE_REJECT_FRAMES = 2  # Allow realtime distance after too many rejecti
 
 # Braking automation
 BRAKING_CURVE_CSV = "class_357_decel.csv.csv"
-STATION_DISTANCE_ADDITION = 0.0  # Additional distance to compensate for short HUD readings.
+STATION_DISTANCE_ADDITION = 0.0  # Additional distance (post-divisor units) to compensate for short HUD readings.
 BRAKE_HOLD_SECONDS = 5.0
 DOOR_KEY = "t"
 BRAKE_KEY = "s"

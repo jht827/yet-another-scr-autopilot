@@ -31,7 +31,7 @@ def run_braking_loop(show_status: bool = True) -> None:
             timestamp = time.strftime("%H:%M:%S")
             print(
                 f"[{timestamp}] speed={filtered_speed:.1f} "
-                f"distance={effective_distance:.1f} required_stop={required_distance:.1f}",
+                f"distance={effective_distance:.2f} required_stop={required_distance:.3f}",
                 flush=True,
             )
 

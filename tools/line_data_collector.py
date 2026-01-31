@@ -7,14 +7,17 @@ import argparse
 import csv
 import json
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import pygetwindow
 import pytesseract
 from PIL import Image, ImageGrab, ImageOps
+from pynput import keyboard
 
 
 @dataclass
@@ -112,6 +115,31 @@ def _capture_field(cfg: FieldConfig, window_bbox: tuple[int, int, int, int] | No
     return _ocr(image, cfg)
 
 
+def _prompt_fullscreen_fallback(reason: str) -> None:
+    print(reason)
+    try:
+        response = input("Fallback to full screen coordinates? [y/N]: ").strip().lower()
+    except EOFError as exc:
+        raise RuntimeError("Window capture unavailable and no fallback confirmation received.") from exc
+    if response not in {"y", "yes"}:
+        raise RuntimeError("Aborted line data collection (fullscreen fallback declined).")
+
+
+def _resolve_window_bbox(config: CollectorConfig) -> tuple[int, int, int, int] | None:
+    if config.window_bbox:
+        return config.window_bbox
+    try:
+        window_bbox = _get_window_bbox(config.window_title)
+    except RuntimeError as exc:
+        _prompt_fullscreen_fallback(str(exc))
+        return None
+    if window_bbox is None:
+        _prompt_fullscreen_fallback(
+            "Window lookup unavailable (pygetwindow backend missing).",
+        )
+    return window_bbox
+
+
 def _parse_float(value: str) -> float | None:
     cleaned = value.replace(",", ".").replace("O", "0").replace("o", "0")
     try:
@@ -152,12 +180,30 @@ def collect(config_path: Path, output_path: Path) -> None:
     last_time = time.monotonic()
     distance_m = 0.0
     last_values: dict[str, str] = {}
+    key_queue: deque[str] = deque()
+    queue_lock = Lock()
+    platform_open = False
 
-    window_bbox = config.window_bbox or _get_window_bbox(config.window_title)
+    window_bbox = _resolve_window_bbox(config)
     if window_bbox is None:
         print(
-            "Warning: window lookup unavailable. Using absolute screen coordinates.",
+            "Warning: Using absolute screen coordinates.",
         )
+
+    def _on_key_press(key: keyboard.Key | keyboard.KeyCode) -> None:
+        try:
+            char = key.char
+        except AttributeError:
+            return
+        if not char:
+            return
+        char = char.lower()
+        if char in {"p", "2", "3", "4", "5", "6", "9"}:
+            with queue_lock:
+                key_queue.append(char)
+
+    listener = keyboard.Listener(on_press=_on_key_press)
+    listener.start()
 
     with output_path.open("w", newline="") as handle:
         fieldnames = [
@@ -176,46 +222,73 @@ def collect(config_path: Path, output_path: Path) -> None:
         _write_header(writer)
 
         poll_interval = 1.0 / max(config.poll_hz, 0.1)
-        print("Starting line data collection. Press Ctrl+C to stop.")
+        print(
+            "Starting line data collection. Press Ctrl+C to stop. "
+            "Hotkeys: P toggles platform start/end; 2-6 mark stop markers; 9 marks S.",
+        )
 
-        while True:
-            now = time.monotonic()
-            dt = now - last_time
-            last_time = now
+        try:
+            while True:
+                now = time.monotonic()
+                dt = now - last_time
+                last_time = now
 
-            values: dict[str, str] = {}
-            for name, field_cfg in config.fields.items():
-                values[name] = _capture_field(field_cfg, window_bbox)
+                values: dict[str, str] = {}
+                for name, field_cfg in config.fields.items():
+                    values[name] = _capture_field(field_cfg, window_bbox)
 
-            speed_mph = _parse_float(values.get("speed", ""))
-            if speed_mph is None:
-                speed_mph = 0.0
-            speed_mps = speed_mph * 0.44704
-            distance_m += speed_mps * dt
+                speed_mph = _parse_float(values.get("speed", ""))
+                if speed_mph is None:
+                    speed_mph = 0.0
+                speed_mps = speed_mph * 0.44704
+                distance_m += speed_mps * dt
 
-            snapshot = {
-                "speed_mph": values.get("speed", ""),
-                "speed_limit_mph": values.get("speed_limit", ""),
-                "distance_to_next_station": values.get("distance_to_next_station", ""),
-                "signal_id": values.get("signal_id", ""),
-                "next_stop": values.get("next_stop", ""),
-                "platform": values.get("platform", ""),
-            }
+                snapshot = {
+                    "speed_mph": values.get("speed", ""),
+                    "speed_limit_mph": values.get("speed_limit", ""),
+                    "distance_to_next_station": values.get("distance_to_next_station", ""),
+                    "signal_id": values.get("signal_id", ""),
+                    "next_stop": values.get("next_stop", ""),
+                    "platform": values.get("platform", ""),
+                }
 
-            for field_name in config.watch_fields:
-                current = values.get(field_name, "").strip()
-                if not current:
-                    continue
-                if last_values.get(field_name) != current:
-                    _write_event(writer, field_name, current, distance_m, snapshot)
+                with queue_lock:
+                    pending_keys = list(key_queue)
+                    key_queue.clear()
+                for key in pending_keys:
+                    if key == "p":
+                        event_type = "platform_marker"
+                        value = "start" if not platform_open else "end"
+                        platform_open = not platform_open
+                    elif key == "9":
+                        event_type = "stop_marker"
+                        value = "S"
+                    else:
+                        event_type = "stop_marker"
+                        value = key
+                    _write_event(writer, event_type, value, distance_m, snapshot)
                     handle.flush()
                     print(
-                        f"[{field_name}] {current} @ {distance_m:.2f} m",
+                        f"[{event_type}] {value} @ {distance_m:.2f} m",
                     )
                     distance_m = 0.0
-                    last_values[field_name] = current
 
-            time.sleep(poll_interval)
+                for field_name in config.watch_fields:
+                    current = values.get(field_name, "").strip()
+                    if not current:
+                        continue
+                    if last_values.get(field_name) != current:
+                        _write_event(writer, field_name, current, distance_m, snapshot)
+                        handle.flush()
+                        print(
+                            f"[{field_name}] {current} @ {distance_m:.2f} m",
+                        )
+                        distance_m = 0.0
+                        last_values[field_name] = current
+
+                time.sleep(poll_interval)
+        finally:
+            listener.stop()
 
 
 def _parse_args() -> argparse.Namespace:

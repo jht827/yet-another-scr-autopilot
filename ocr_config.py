@@ -35,7 +35,7 @@ DISTANCE_BASE_TOLERANCE = 0.8  # Base tolerance for OCR distance vs prediction.
 DISTANCE_TOLERANCE_PER_MPH = 0.01  # Extra tolerance per mph of speed.
 
 # OCR misread fixups (distance)
-DISTANCE_07X_FIX_LOOKBACK = 4  # Lookback window for detecting 07X misreads.
+DISTANCE_07X_FIX_LOOKBACK = 20  # Lookback window for detecting 07X misreads.
 DISTANCE_03X_REQUIRED = 2  # Require this many 03X readings in the window to fix 07X -> 02X.
 
 # Correction backoff

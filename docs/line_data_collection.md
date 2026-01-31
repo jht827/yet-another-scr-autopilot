@@ -11,6 +11,11 @@ distance-to-next-station, then integrates speed over time to estimate distance b
    ```bash
    python tools/roi_boxer.py --config config/line_data_config.json
    ```
+   If `tkinter` is unavailable, run the CLI fallback which saves a snapshot and lets you type
+   the ROI coordinates:
+   ```bash
+   python tools/roi_boxer.py --mode cli --snapshot recordings/roi_snapshot.png
+   ```
 3. Run the collector:
    ```bash
    python tools/line_data_collector.py \
@@ -39,7 +44,7 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.
 - `pygetwindow` for window-scoped capture.
-- `tkinter` for the ROI boxing UI (usually bundled with Python on Windows).
+- `tkinter` for the ROI boxing UI (optional; CLI fallback works without it).
 
 ## Next Steps
 - Add a review step to merge OCR noise into clean IDs and stop names.

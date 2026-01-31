@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pygetwindow
 import pytesseract
 from PIL import Image, ImageGrab, ImageOps
 
@@ -80,14 +81,6 @@ def _ocr(image: Image.Image, cfg: FieldConfig) -> str:
 
 
 def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
-    try:
-        import pygetwindow
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "pygetwindow is required to capture the Roblox window. "
-            "Install it with `pip install pygetwindow`.",
-        ) from exc
-
     windows = pygetwindow.getWindowsWithTitle(window_title)
     if not windows:
         raise RuntimeError(f"No window found with title containing '{window_title}'.")

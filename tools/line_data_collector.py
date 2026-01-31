@@ -81,7 +81,18 @@ def _ocr(image: Image.Image, cfg: FieldConfig) -> str:
 
 
 def _get_window_bbox(window_title: str) -> tuple[int, int, int, int]:
-    windows = pygetwindow.getWindowsWithTitle(window_title)
+    if hasattr(pygetwindow, "getWindowsWithTitle"):
+        windows = pygetwindow.getWindowsWithTitle(window_title)
+    elif hasattr(pygetwindow, "getAllWindows"):
+        windows = [
+            window
+            for window in pygetwindow.getAllWindows()
+            if window_title.lower() in window.title.lower()
+        ]
+    else:
+        raise RuntimeError(
+            "pygetwindow does not expose window lookup helpers on this platform.",
+        )
     if not windows:
         raise RuntimeError(f"No window found with title containing '{window_title}'.")
     window = windows[0]

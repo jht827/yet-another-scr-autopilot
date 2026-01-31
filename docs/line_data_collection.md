@@ -40,6 +40,7 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 - `threshold` applies a simple binary threshold for numeric fields.
 - `whitelist` limits OCR characters for speed and stability.
 - `window_title` must match the Roblox window title so capture is scoped to that window.
+  The matcher looks for the title as a substring (case-insensitive).
 
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.

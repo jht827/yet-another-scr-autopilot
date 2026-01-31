@@ -38,16 +38,21 @@ class StatusState:
 
 
 def _apply_ocr_settings() -> None:
+    # Allow overriding the Tesseract binary path for environments without a default install.
     if ocr_config.TESSERACT_CMD:
         pytesseract.pytesseract.tesseract_cmd = ocr_config.TESSERACT_CMD
 
 
 def _crop(image: Image.Image, region: Tuple[int, int, int, int]) -> Image.Image:
+    # Region tuple is (left, top, right, bottom) in screen coordinates.
+    # Keeping this tiny helper avoids repeating tuple unpacking in the main loop.
     left, top, right, bottom = region
     return image.crop((left, top, right, bottom))
 
 
 def _red_mask(image: Image.Image) -> Image.Image:
+    # Isolate red pixels to help OCR for red HUD digits.
+    # The subtraction removes non-red content so only strong red survives.
     red, green, blue = image.split()
     non_red = ImageChops.lighter(green, blue)
     red_only = ImageChops.subtract(red, non_red)
@@ -55,6 +60,8 @@ def _red_mask(image: Image.Image) -> Image.Image:
 
 
 def _preprocess(image: Image.Image) -> Image.Image:
+    # Threshold to a high-contrast image and optionally blend in the red channel mask.
+    # This keeps background noise low while preserving digits for OCR.
     grayscale = ImageOps.grayscale(image)
     base = grayscale.point(lambda p: 255 if p > ocr_config.THRESHOLD else 0)
     if ocr_config.USE_RED_DETECTION:
@@ -64,6 +71,8 @@ def _preprocess(image: Image.Image) -> Image.Image:
 
 
 def _read_digits(image: Image.Image) -> str:
+    # Restrict OCR to numeric characters for faster, cleaner results.
+    # The whitelist prevents stray punctuation or letters from being returned.
     config = (
         f"--psm {ocr_config.TESSERACT_PSM} "
         f"-c tessedit_char_whitelist={ocr_config.TESSERACT_WHITELIST}"
@@ -73,21 +82,29 @@ def _read_digits(image: Image.Image) -> str:
 
 
 def _is_stopped(speed_value: int | None) -> bool:
+    # Treat very low speeds as a stop for distance reset logic.
+    # This threshold smooths small OCR jitters when the vehicle is idle.
     return speed_value is not None and speed_value <= ocr_config.STOP_SPEED_THRESHOLD
 
 
 def _grab_full_screen(sct: mss.mss) -> Image.Image:
+    # Capture the primary monitor as an RGB image for OCR processing.
+    # The OCR regions are then cropped from this full-frame capture.
     monitor = sct.monitors[1]
     shot = sct.grab(monitor)
     return Image.frombytes("RGB", (shot.width, shot.height), shot.rgb)
 
 
 def _print_status(speed: str, miles: str, fps: float) -> None:
+    # Emit a compact status line with OCR values and current FPS.
+    # Use flush=True so log consumers see updates immediately.
     timestamp = time.strftime("%H:%M:%S")
     print(f"[{timestamp}] speed={speed or '-'} miles={miles or '-'} fps={fps:.1f}", flush=True)
 
 
 def _read_regions(full: Image.Image, regions: Regions) -> tuple[str, str]:
+    # Crop and preprocess the speed/mileage regions before OCR.
+    # Returning raw digits keeps corrections centralized in ocr_corrections.
     speed_img = _preprocess(_crop(full, regions.speed))
     miles_img = _preprocess(_crop(full, regions.miles))
     raw_speed = _read_digits(speed_img)
@@ -96,6 +113,8 @@ def _read_regions(full: Image.Image, regions: Regions) -> tuple[str, str]:
 
 
 def _update_stop_timer(state: CorrectionState, speed_value: int | None, now: float) -> None:
+    # Track how long we've been stopped to allow a distance reset.
+    # The timer is cleared as soon as we detect movement.
     if _is_stopped(speed_value):
         if state.stop_start is None:
             state.stop_start = now
@@ -104,12 +123,16 @@ def _update_stop_timer(state: CorrectionState, speed_value: int | None, now: flo
 
 
 def _format_output(speed_value: int | None, miles_value: int | None) -> tuple[str, str]:
+    # Format output with fixed-width mileage and blank placeholders.
+    # Keep formatting isolated to simplify log output changes.
     speed = f"{speed_value}" if speed_value is not None else ""
     miles = f"{miles_value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if miles_value is not None else ""
     return speed, miles
 
 
 def _update_fps(state: StatusState, now: float) -> None:
+    # Update FPS once per second using a rolling frame counter.
+    # This avoids per-frame prints while still exposing throughput.
     state.frame_count += 1
     elapsed = now - state.fps_timer
     if elapsed >= 1.0:
@@ -124,6 +147,8 @@ def _should_print(
     miles: str,
     now: float,
 ) -> bool:
+    # Decide whether to print based on change detection or time interval.
+    # This keeps the log quieter while still emitting periodic status lines.
     changed = speed != state.last_speed_text or miles != state.last_miles_text
     time_since_status = now - state.last_status
     return (
@@ -134,6 +159,8 @@ def _should_print(
 
 
 def _allow_distance_reset(state: CorrectionState, now: float) -> bool:
+    # Permit distance reset only after a stable stopped interval.
+    # This prevents false resets from brief OCR dropouts.
     return state.stop_start is not None and (
         now - state.stop_start
     ) >= ocr_config.MIN_SPEED_STABLE_FOR_RESET_SEC
@@ -150,11 +177,13 @@ def main() -> None:
     with mss.mss() as sct:
         while True:
             loop_start = time.perf_counter()
+            # Capture the frame as early as possible to minimize latency.
             full = _grab_full_screen(sct)
 
             raw_speed, raw_miles = _read_regions(full, regions)
 
             now = time.perf_counter()
+            # Clamp delta_t so corrections don't explode on long pauses.
             delta_t = max(0.001, now - status_state.last_update)
             status_state.last_update = now
 
@@ -178,12 +207,14 @@ def main() -> None:
             _update_fps(status_state, now)
 
             if _should_print(status_state, speed, miles, now):
+                # Cache last printed values for change detection.
                 _print_status(speed, miles, status_state.fps)
                 status_state.last_status = now
                 status_state.last_speed_text = speed
                 status_state.last_miles_text = miles
 
             loop_end = time.perf_counter()
+            # Sleep only if we're faster than the target FPS.
             sleep_for = target_frame_time - (loop_end - loop_start)
             if sleep_for > 0:
                 time.sleep(sleep_for)

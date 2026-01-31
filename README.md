@@ -6,7 +6,7 @@ Project documentation:
 Developer notes:
 - Vision helpers live in `scr_autopilot/vision/` (see `screen_capture.py`, `roi_selector.py`).
 - macOS Roblox capture demo: `roblox_capture.py`.
-- HUD OCR coordinates live in `scr_autopilot/hud_config.py` (update `HUD_ROIS` after boxing).
+- HUD OCR coordinates and OCR tuning live in the root `scr_autopilot.toml` config.
 
 ## HUD reader usage
 
@@ -45,3 +45,14 @@ python scr_autopilot/hud_readout.py \
 
 Debug output includes the thresholded speed ROI, contour overlays, per-digit crops,
 and a `speed_matches.txt` summary file inside `hud_debug/opencv_speed_<timestamp>/`.
+
+## Acceleration curve capture
+
+Capture the train acceleration curve (speed vs. time) and write a CSV of speed and
+acceleration estimates:
+
+```bash
+python scr_autopilot/accel_curve.py --output-csv accel_curve.csv
+```
+
+Adjust the sample interval, smoothing window, and OCR settings in `scr_autopilot.toml`.

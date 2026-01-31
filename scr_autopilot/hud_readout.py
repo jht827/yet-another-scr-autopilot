@@ -1,28 +1,31 @@
 import argparse
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 import cv2
 import numpy as np
-import pytesseract
-from PIL import Image, ImageOps
 
-from scr_autopilot.hud_config import HUD_ROIS, REFERENCE_SIZE, WINDOW_TITLE, HudRois, PixelRoi
+from scr_autopilot.config import HudRois, OcrOpenCvConfig, OcrTesseractConfig, PixelRoi, load_config
+from scr_autopilot.ocr_tools import (
+    clamp_roi,
+    preprocess_for_tesseract,
+    read_roi_text,
+    read_speed_opencv,
+    to_pil,
+)
 from scr_autopilot.vision import (
     OcrDebug,
     ScreenGrabber,
     WindowRegion,
     find_window_region,
     load_digit_templates,
-    recognize_digits,
     summarize_matches,
 )
 
 
-def resolve_region() -> WindowRegion:
-    return find_window_region(WINDOW_TITLE)
+def resolve_region(title: str) -> WindowRegion:
+    return find_window_region(title)
 
 
 def debug_log(enabled: bool, message: str) -> None:
@@ -34,7 +37,7 @@ def build_region_provider(
     args: argparse.Namespace,
     log: Callable[[str], None],
 ) -> Callable[[], WindowRegion]:
-    last_region = resolve_region()
+    last_region = resolve_region(args.window_title)
     last_error: Optional[str] = None
     last_refresh = 0.0
 
@@ -45,7 +48,7 @@ def build_region_provider(
             return last_region
         last_refresh = now
         try:
-            last_region = find_window_region(WINDOW_TITLE)
+            last_region = find_window_region(args.window_title)
             if last_error:
                 log("Window capture recovered.")
             last_error = None
@@ -55,18 +58,8 @@ def build_region_provider(
                 last_error = str(exc)
         return last_region
 
-    log(f"Attempting to capture window matching '{WINDOW_TITLE}'.")
+    log(f"Attempting to capture window matching '{args.window_title}'.")
     return provider
-
-
-def clamp_roi(frame: np.ndarray, roi: PixelRoi) -> Optional[np.ndarray]:
-    x0 = max(roi.x, 0)
-    y0 = max(roi.y, 0)
-    x1 = min(roi.x + roi.width, frame.shape[1])
-    y1 = min(roi.y + roi.height, frame.shape[0])
-    if x1 <= x0 or y1 <= y0:
-        return None
-    return frame[y0:y1, x0:x1]
 
 
 def parse_roi(value: Optional[str], default: PixelRoi) -> PixelRoi:
@@ -76,67 +69,162 @@ def parse_roi(value: Optional[str], default: PixelRoi) -> PixelRoi:
     return PixelRoi(x=x, y=y, width=w, height=h)
 
 
-def to_pil(frame: np.ndarray) -> Image.Image:
-    return Image.fromarray(frame[:, :, ::-1])
-
-
-def preprocess_for_tesseract(
-    roi: np.ndarray,
-    threshold: Optional[int],
-    invert: bool,
-    scale: float,
-) -> Image.Image:
-    image = to_pil(roi)
-    if scale != 1.0:
-        width = max(1, int(image.width * scale))
-        height = max(1, int(image.height * scale))
-        image = image.resize((width, height), Image.BILINEAR)
-    gray = ImageOps.autocontrast(image.convert("L"))
-    if threshold is not None:
-        gray = gray.point(lambda p: 255 if p > threshold else 0)
-    if invert:
-        gray = ImageOps.invert(gray)
-    return gray
-
-
-def tesseract_config(args: argparse.Namespace) -> str:
-    return (
-        f"--psm {args.tesseract_psm} --oem {args.tesseract_oem} "
-        f"-c tessedit_char_whitelist={args.whitelist}"
+def build_parser(config) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read HUD values from fixed pixel ROIs using Tesseract OCR.",
     )
-
-
-def read_roi_text(roi: np.ndarray, args: argparse.Namespace) -> str:
-    processed = preprocess_for_tesseract(roi, args.threshold, args.invert, args.scale)
-    text = pytesseract.image_to_string(processed, config=tesseract_config(args), lang=args.lang)
-    cleaned = "".join(char for char in text.strip().lower() if char.isalnum())
-    return cleaned
-
-
-def read_speed_opencv(
-    roi: np.ndarray,
-    templates: dict[str, np.ndarray],
-    args: argparse.Namespace,
-) -> tuple[str, Optional[OcrDebug]]:
-    if not templates:
-        return "", None
-    text, debug = recognize_digits(
-        roi,
-        templates,
-        threshold=args.opencv_threshold,
-        invert=args.opencv_invert,
-        min_area=args.opencv_min_area,
-        min_height=args.opencv_min_height,
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to the central scr_autopilot.toml config file.",
     )
-    cleaned = "".join(char for char in text.strip().lower() if char.isalnum())
-    return cleaned, debug
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=config.readout.interval,
+        help="Seconds between terminal updates.",
+    )
+    parser.add_argument(
+        "--speed-roi",
+        help=(
+            "Absolute ROI for speed as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {config.window.reference_size[0]}x{config.window.reference_size[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--speed-ocr",
+        choices=("tesseract", "opencv"),
+        default=config.ocr.speed_backend,
+        help="OCR backend for the speed readout.",
+    )
+    parser.add_argument(
+        "--speed-template-dir",
+        type=Path,
+        default=config.ocr.opencv.speed_template_dir,
+        help="Folder containing digit templates for OpenCV OCR (png per digit).",
+    )
+    parser.add_argument(
+        "--limit-roi",
+        help=(
+            "Absolute ROI for speed limit as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {config.window.reference_size[0]}x{config.window.reference_size[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--distance-roi",
+        help=(
+            "Absolute ROI for next-station distance as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {config.window.reference_size[0]}x{config.window.reference_size[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=config.ocr.tesseract.threshold if config.ocr.tesseract.threshold is not None else -1,
+        help="Binarization threshold (0-255). Set to -1 to disable thresholding.",
+    )
+    parser.add_argument(
+        "--invert",
+        action="store_true",
+        default=config.ocr.tesseract.invert,
+        help="Invert ROI colors before OCR.",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=config.ocr.tesseract.scale,
+        help="Scale factor before OCR (higher can improve accuracy).",
+    )
+    parser.add_argument(
+        "--opencv-threshold",
+        type=int,
+        default=config.ocr.opencv.threshold if config.ocr.opencv.threshold is not None else -1,
+        help="Threshold for OpenCV template OCR (0-255). Set to -1 for adaptive thresholding.",
+    )
+    parser.add_argument(
+        "--opencv-invert",
+        action="store_true",
+        default=config.ocr.opencv.invert,
+        help="Invert OpenCV OCR thresholding (useful for bright text).",
+    )
+    parser.add_argument(
+        "--opencv-min-area",
+        type=int,
+        default=config.ocr.opencv.min_area,
+        help="Minimum contour area for digit segmentation in OpenCV OCR.",
+    )
+    parser.add_argument(
+        "--opencv-min-height",
+        type=int,
+        default=config.ocr.opencv.min_height,
+        help="Minimum contour height for digit segmentation in OpenCV OCR.",
+    )
+    parser.add_argument(
+        "--opencv-debug",
+        action="store_true",
+        default=config.readout.opencv_debug,
+        help="Dump OpenCV OCR intermediate images and match summaries.",
+    )
+    parser.add_argument(
+        "--whitelist",
+        default=config.ocr.tesseract.whitelist,
+        help="Tesseract whitelist for allowed characters.",
+    )
+    parser.add_argument(
+        "--lang",
+        default=config.ocr.tesseract.lang,
+        help="Tesseract language to use (default: eng).",
+    )
+    parser.add_argument(
+        "--tesseract-psm",
+        type=int,
+        default=config.ocr.tesseract.psm,
+        help="Tesseract page segmentation mode (PSM).",
+    )
+    parser.add_argument(
+        "--tesseract-oem",
+        type=int,
+        default=config.ocr.tesseract.oem,
+        help="Tesseract OCR engine mode (OEM).",
+    )
+    parser.add_argument(
+        "--window-title",
+        default=config.window.title,
+        help="Window title/owner hint to match.",
+    )
+    parser.add_argument(
+        "--window-refresh",
+        type=float,
+        default=config.window.refresh_seconds,
+        help="Seconds between window region refreshes when tracking the Roblox window.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=config.readout.debug,
+        help="Enable debug logging about capture status and frame timing.",
+    )
+    parser.add_argument(
+        "--debug-dir",
+        type=Path,
+        default=config.readout.debug_dir,
+        help="Folder to dump a full frame + ROI crops for debugging.",
+    )
+    parser.add_argument(
+        "--debug-interval",
+        type=float,
+        default=config.readout.debug_interval,
+        help="Seconds between debug dumps (frame stats + OpenCV debug output).",
+    )
+    return parser
 
 
 def maybe_dump_debug(
     debug_dir: Optional[Path],
     frame: np.ndarray,
     rois: dict[str, Optional[np.ndarray]],
-    args: argparse.Namespace,
+    tesseract_settings: OcrTesseractConfig,
     dumped: bool,
 ) -> bool:
     if not debug_dir or dumped:
@@ -147,7 +235,7 @@ def maybe_dump_debug(
         if roi is None:
             continue
         to_pil(roi).save(debug_dir / f"{name}.png")
-        processed = preprocess_for_tesseract(roi, args.threshold, args.invert, args.scale)
+        processed = preprocess_for_tesseract(roi, tesseract_settings)
         processed.save(debug_dir / f"{name}_ocr.png")
     return True
 
@@ -184,149 +272,37 @@ def format_value(value: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Read HUD values from fixed pixel ROIs using Tesseract OCR.",
-    )
-    parser.add_argument(
-        "--interval",
-        type=float,
-        default=0.05,
-        help="Seconds between terminal updates.",
-    )
-    parser.add_argument(
-        "--speed-roi",
-        help=(
-            "Absolute ROI for speed as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
-        ),
-    )
-    parser.add_argument(
-        "--speed-ocr",
-        choices=("tesseract", "opencv"),
-        default="tesseract",
-        help="OCR backend for the speed readout.",
-    )
-    parser.add_argument(
-        "--speed-template-dir",
-        type=Path,
-        default=Path("templates/speed_digits"),
-        help="Folder containing digit templates for OpenCV OCR (png per digit).",
-    )
-    parser.add_argument(
-        "--limit-roi",
-        help=(
-            "Absolute ROI for speed limit as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
-        ),
-    )
-    parser.add_argument(
-        "--distance-roi",
-        help=(
-            "Absolute ROI for next-station distance as 'x,y,width,height' relative to capture region. "
-            f"Default is tuned for {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}."
-        ),
-    )
-    parser.add_argument(
-        "--threshold",
-        type=int,
-        default=160,
-        help="Binarization threshold (0-255). Set to -1 to disable thresholding.",
-    )
-    parser.add_argument(
-        "--invert",
-        action="store_true",
-        help="Invert ROI colors before OCR.",
-    )
-    parser.add_argument(
-        "--scale",
-        type=float,
-        default=2.0,
-        help="Scale factor before OCR (higher can improve accuracy).",
-    )
-    parser.add_argument(
-        "--opencv-threshold",
-        type=int,
-        default=160,
-        help="Threshold for OpenCV template OCR (0-255). Set to -1 for adaptive thresholding.",
-    )
-    parser.add_argument(
-        "--opencv-invert",
-        action="store_true",
-        help="Invert OpenCV OCR thresholding (useful for bright text).",
-    )
-    parser.add_argument(
-        "--opencv-min-area",
-        type=int,
-        default=30,
-        help="Minimum contour area for digit segmentation in OpenCV OCR.",
-    )
-    parser.add_argument(
-        "--opencv-min-height",
-        type=int,
-        default=10,
-        help="Minimum contour height for digit segmentation in OpenCV OCR.",
-    )
-    parser.add_argument(
-        "--opencv-debug",
-        action="store_true",
-        help="Dump OpenCV OCR intermediate images and match summaries.",
-    )
-    parser.add_argument(
-        "--whitelist",
-        default="0123456789abcdefghijklmnopqrstuvwxyz",
-        help="Tesseract whitelist for allowed characters.",
-    )
-    parser.add_argument(
-        "--lang",
-        default="eng",
-        help="Tesseract language to use (default: eng).",
-    )
-    parser.add_argument(
-        "--tesseract-psm",
-        type=int,
-        default=7,
-        help="Tesseract page segmentation mode (PSM).",
-    )
-    parser.add_argument(
-        "--tesseract-oem",
-        type=int,
-        default=1,
-        help="Tesseract OCR engine mode (OEM).",
-    )
-    parser.add_argument(
-        "--window-refresh",
-        type=float,
-        default=1.0,
-        help="Seconds between window region refreshes when tracking the Roblox window.",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging about capture status and frame timing.",
-    )
-    parser.add_argument(
-        "--debug-dir",
-        type=Path,
-        default=Path("hud_debug"),
-        help="Folder to dump a full frame + ROI crops for debugging.",
-    )
-    parser.add_argument(
-        "--debug-interval",
-        type=float,
-        default=1.0,
-        help="Seconds between debug dumps (frame stats + OpenCV debug output).",
-    )
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=Path, default=None)
+    pre_args, _ = pre_parser.parse_known_args()
+    config = load_config(pre_args.config)
+    parser = build_parser(config)
     args = parser.parse_args()
 
     threshold = None if args.threshold < 0 else args.threshold
-    args.threshold = threshold
     opencv_threshold = None if args.opencv_threshold < 0 else args.opencv_threshold
-    args.opencv_threshold = opencv_threshold
 
     rois = HudRois(
-        speed=parse_roi(args.speed_roi, HUD_ROIS.speed),
-        limit=parse_roi(args.limit_roi, HUD_ROIS.limit),
-        distance=parse_roi(args.distance_roi, HUD_ROIS.distance),
+        speed=parse_roi(args.speed_roi, config.rois.speed),
+        limit=parse_roi(args.limit_roi, config.rois.limit),
+        distance=parse_roi(args.distance_roi, config.rois.distance),
+    )
+
+    tesseract_settings = OcrTesseractConfig(
+        threshold=threshold,
+        invert=args.invert,
+        scale=args.scale,
+        whitelist=args.whitelist,
+        lang=args.lang,
+        psm=args.tesseract_psm,
+        oem=args.tesseract_oem,
+    )
+    opencv_settings = OcrOpenCvConfig(
+        threshold=opencv_threshold,
+        invert=args.opencv_invert,
+        min_area=args.opencv_min_area,
+        min_height=args.opencv_min_height,
+        speed_template_dir=args.speed_template_dir,
     )
 
     log = lambda message: debug_log(args.debug, message)
@@ -363,21 +339,25 @@ def main() -> None:
                 args.debug_dir,
                 frame,
                 {"speed_roi": speed_roi, "limit_roi": limit_roi, "distance_roi": distance_roi},
-                args,
+                tesseract_settings,
                 debug_dumped,
             )
 
             speed_debug: Optional[OcrDebug] = None
             if speed_roi is not None and args.speed_ocr == "opencv":
-                speed_text, speed_debug = read_speed_opencv(speed_roi, speed_templates, args)
+                speed_text, speed_debug = read_speed_opencv(
+                    speed_roi, speed_templates, opencv_settings
+                )
                 speed_value = format_value(speed_text)
             else:
                 speed_value = format_value(
-                    read_roi_text(speed_roi, args) if speed_roi is not None else ""
+                    read_roi_text(speed_roi, tesseract_settings) if speed_roi is not None else ""
                 )
-            limit_value = format_value(read_roi_text(limit_roi, args) if limit_roi is not None else "")
+            limit_value = format_value(
+                read_roi_text(limit_roi, tesseract_settings) if limit_roi is not None else ""
+            )
             distance_value = format_value(
-                read_roi_text(distance_roi, args) if distance_roi is not None else ""
+                read_roi_text(distance_roi, tesseract_settings) if distance_roi is not None else ""
             )
 
             line = (

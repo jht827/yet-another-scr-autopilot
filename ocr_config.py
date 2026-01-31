@@ -3,16 +3,23 @@
 # Screen regions (left, top, right, bottom)
 REGION_SPEED = (2144, 1310, 2206, 1341)
 REGION_MILES = (180, 1378, 222, 1393)
+REGION_NEXT_SIGNAL_NUMBER = (269, 1375, 330, 1394)
+REGION_NEXT_SIGNAL_DISTANCE = (286, 1398, 305, 1417)
+REGION_PLATFORM_NUMBER = (94, 1403, 121, 1418)
+REGION_ROUTE_NUMBER = (182, 1293, 228, 1308)
+REGION_NEXT_STATION = (17, 1354, 244, 1370)
 
 # OCR settings
 TESSERACT_CMD = None  # Set to full path if tesseract is not on PATH.
 TESSERACT_PSM = 7
 TESSERACT_WHITELIST = "0123456789"
+ALPHANUM_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 # Performance tuning
 TARGET_FPS = 30  # Desired loop frequency.
 PRINT_ON_CHANGE_ONLY = True
 STATUS_EVERY_SECONDS = 2.0  # Print status even if unchanged.
+SLOW_READ_INTERVAL = 5.0  # Seconds between slow OCR reads.
 
 # Preprocessing
 THRESHOLD = 160  # 0-255; tweak for better OCR.

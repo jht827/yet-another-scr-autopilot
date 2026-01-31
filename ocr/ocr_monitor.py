@@ -57,9 +57,9 @@ class StatusState:
 @dataclass
 class OcrReading:
     speed_value: int | None
-    miles_value: int | None
+    miles_value: float | None
     next_signal_number: str
-    next_signal_distance_value: int | None
+    next_signal_distance_value: float | None
     platform_number: str
     route_number: str
     next_station: str
@@ -193,16 +193,22 @@ def _update_stop_timer(state: CorrectionState, speed_value: int | None, now: flo
         state.stop_start = None
 
 
+def _scale_distance(value: int | None) -> float | None:
+    if value is None:
+        return None
+    return value / ocr_config.DISTANCE_DIVISOR
+
+
 def _format_output(speed_value: int | None, miles_value: int | None) -> tuple[str, str]:
     # Format output with fixed-width mileage and blank placeholders.
     # Keep formatting isolated to simplify log output changes.
     speed = f"{speed_value}" if speed_value is not None else ""
-    miles = f"{miles_value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if miles_value is not None else ""
+    miles = _format_distance(_scale_distance(miles_value))
     return speed, miles
 
 
-def _format_distance(value: int | None) -> str:
-    return f"{value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if value is not None else ""
+def _format_distance(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else ""
 
 
 def _update_fps(state: StatusState, now: float) -> None:
@@ -321,9 +327,11 @@ def stream_ocr(print_status: bool = True) -> Iterator[OcrReading]:
             if next_signal_distance_value is not None:
                 correction_state.next_signal_distance.last_miles_value = next_signal_distance_value
 
+            scaled_miles_value = _scale_distance(miles_value)
+            scaled_next_signal_distance_value = _scale_distance(next_signal_distance_value)
             speed, miles = _format_output(speed_value, miles_value)
             next_signal_number = raw_next_signal_number
-            next_signal_distance = _format_distance(next_signal_distance_value)
+            next_signal_distance = _format_distance(scaled_next_signal_distance_value)
 
             if now - status_state.last_slow_read >= ocr_config.SLOW_READ_INTERVAL:
                 status_state.last_slow_read = now
@@ -380,9 +388,9 @@ def stream_ocr(print_status: bool = True) -> Iterator[OcrReading]:
 
             reading = OcrReading(
                 speed_value=speed_value,
-                miles_value=miles_value,
+                miles_value=scaled_miles_value,
                 next_signal_number=next_signal_number,
-                next_signal_distance_value=next_signal_distance_value,
+                next_signal_distance_value=scaled_next_signal_distance_value,
                 platform_number=platform_number,
                 route_number=route_number,
                 next_station=next_station,

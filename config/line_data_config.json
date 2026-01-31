@@ -1,6 +1,4 @@
 {
-  "window_title": "Roblox",
-  "window_bbox": null,
   "poll_hz": 2,
   "watch_fields": ["signal_id", "next_stop", "platform"],
   "fields": {

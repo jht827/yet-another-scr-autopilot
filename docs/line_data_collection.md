@@ -5,9 +5,9 @@ The collector watches the HUD for speed, speed limit, signal ID, next stop name,
 distance-to-next-station, then integrates speed over time to estimate distance between nodes.
 
 ## Quick Start
-1. Update the global config (window title + ROI values):
+1. Update the global config (ROI values):
    - `config/line_data_config.json`
-2. (Recommended) Use the ROI boxing tool to select areas on the Roblox window:
+2. (Recommended) Use the ROI boxing tool to select areas on your screen:
    ```bash
    python tools/roi_boxer.py --config config/line_data_config.json
    ```
@@ -43,15 +43,10 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 - `scale` is an integer multiplier for OCR readability.
 - `threshold` applies a simple binary threshold for numeric fields.
 - `whitelist` limits OCR characters for speed and stability.
-- `window_title` must match the Roblox window title so capture is scoped to that window.
-  The matcher looks for the title as a substring (case-insensitive).
-- `window_bbox` can be set manually as `[left, top, right, bottom]` if window lookup fails.
-  If the window cannot be found, the collector prompts before falling back to full-screen
-  coordinates.
+- The collector always uses absolute screen coordinates.
 
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.
-- `pyobjc` (Quartz) for window-scoped capture on macOS.
 - `tkinter` for the ROI boxing UI (optional; CLI fallback works without it).
 
 ## Next Steps

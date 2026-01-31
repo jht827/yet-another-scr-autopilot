@@ -49,3 +49,13 @@ DISTANCE_03X_REQUIRED = 2  # Require this many 03X readings in the window to fix
 # Correction backoff
 MAX_SPEED_REJECT_FRAMES = 4  # Allow realtime speed after too many rejections.
 MAX_DISTANCE_REJECT_FRAMES = 2  # Allow realtime distance after too many rejections.
+
+# Braking automation
+BRAKING_CURVE_CSV = "class_357_decel.csv.csv"
+STATION_DISTANCE_ADDITION = 0.0  # Additional distance to compensate for short HUD readings.
+BRAKE_HOLD_SECONDS = 5.0
+DOOR_KEY = "t"
+BRAKE_KEY = "s"
+DOOR_PRESS_COUNT = 2
+DOOR_PRESS_INTERVAL = 0.15
+JITTER_WINDOW = 5

@@ -93,7 +93,6 @@ class ScreenGrabber:
                 }
                 screenshot = sct.grab(monitor)
                 frame = np.array(screenshot)[:, :, :3]
-                frame = frame[:, :, ::-1]  # BGRA -> BGR
                 timestamp = time.time()
                 with self._lock:
                     self._latest = ScreenSample(frame=frame, timestamp=timestamp)

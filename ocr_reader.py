@@ -12,8 +12,8 @@ from config import (
     DEBUG_OCR,
 )
 
-# OCR settings borrowed from discarded/old logic
-TESSERACT_SCALE = 2.0
+# OCR settings aligned with discarded/3rdgen logic
+TESSERACT_SCALE = 2
 TESSERACT_THRESHOLD = 160
 TESSERACT_INVERT = False
 TESSERACT_LANG = "eng"
@@ -52,65 +52,59 @@ def preprocess_for_tesseract(
     invert=TESSERACT_INVERT,
     scale=TESSERACT_SCALE,
 ):
-    if scale != 1.0:
-        width = max(1, int(image.width * scale))
-        height = max(1, int(image.height * scale))
-        image = image.resize((width, height), Image.BILINEAR)
-    gray = ImageOps.autocontrast(image.convert("L"))
-    if threshold is not None:
-        gray = gray.point(lambda p: 255 if p > threshold else 0)
+    if scale > 1:
+        image = image.resize(
+            (image.width * scale, image.height * scale),
+            resample=Image.NEAREST,
+        )
+    gray = ImageOps.grayscale(image)
     if invert:
         gray = ImageOps.invert(gray)
+    if threshold is not None:
+        gray = gray.point(lambda p: 255 if p > threshold else 0)
     return gray
 
 
 # 通用 OCR 读取函数
 def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST, label="unknown"):
     img = crop_region(frame, region) if frame is not None else ImageGrab.grab(bbox=region)
-    attempts = []
-    variant_settings = [
-        {"threshold": TESSERACT_THRESHOLD, "invert": TESSERACT_INVERT, "psm": TESSERACT_PSM},
-        {"threshold": None, "invert": TESSERACT_INVERT, "psm": TESSERACT_PSM},
-        {"threshold": TESSERACT_THRESHOLD, "invert": not TESSERACT_INVERT, "psm": 8},
-        {"threshold": None, "invert": not TESSERACT_INVERT, "psm": 8},
+    processed = preprocess_for_tesseract(
+        img,
+        threshold=TESSERACT_THRESHOLD,
+        invert=TESSERACT_INVERT,
+        scale=TESSERACT_SCALE,
+    )
+    config = (
+        f"--psm {TESSERACT_PSM} --oem {TESSERACT_OEM} "
+        f"-c tessedit_char_whitelist={whitelist}"
+    )
+    text = pytesseract.image_to_string(processed, config=config, lang=TESSERACT_LANG).strip()
+    text = text.replace("O", "0").replace("o", "0")
+    digits = "".join(c for c in text if c.isdigit())
+    attempts = [
+        {
+            "raw_text": text,
+            "digits": digits,
+            "threshold": TESSERACT_THRESHOLD,
+            "invert": TESSERACT_INVERT,
+            "psm": TESSERACT_PSM,
+        }
     ]
 
-    for variant in variant_settings:
-        processed = preprocess_for_tesseract(
-            img,
-            threshold=variant["threshold"],
-            invert=variant["invert"],
+    if digits:
+        _record_ocr_debug(
+            label,
+            raw_text=text,
+            digits=digits,
+            region=region,
+            whitelist=whitelist,
+            attempts=attempts,
         )
-        config = (
-            f"--psm {variant['psm']} --oem {TESSERACT_OEM} "
-            f"-c tessedit_char_whitelist={whitelist}"
-        )
-        text = pytesseract.image_to_string(processed, config=config, lang=TESSERACT_LANG).strip()
-        text = text.replace("O", "0").replace("o", "0")
-        digits = "".join(c for c in text if c.isdigit())
-        attempts.append(
-            {
-                "raw_text": text,
-                "digits": digits,
-                "threshold": variant["threshold"],
-                "invert": variant["invert"],
-                "psm": variant["psm"],
-            }
-        )
-        if digits:
-            _record_ocr_debug(
-                label,
-                raw_text=text,
-                digits=digits,
-                region=region,
-                whitelist=whitelist,
-                attempts=attempts,
-            )
-            return digits
+        return digits
 
     _record_ocr_debug(
         label,
-        raw_text=attempts[-1]["raw_text"] if attempts else "",
+        raw_text=text,
         digits="",
         region=region,
         whitelist=whitelist,

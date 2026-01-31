@@ -46,15 +46,20 @@ def crop_region(frame: Image.Image, region):
     return frame.crop(region)
 
 
-def preprocess_for_tesseract(image: Image.Image):
-    if TESSERACT_SCALE != 1.0:
-        width = max(1, int(image.width * TESSERACT_SCALE))
-        height = max(1, int(image.height * TESSERACT_SCALE))
+def preprocess_for_tesseract(
+    image: Image.Image,
+    threshold=TESSERACT_THRESHOLD,
+    invert=TESSERACT_INVERT,
+    scale=TESSERACT_SCALE,
+):
+    if scale != 1.0:
+        width = max(1, int(image.width * scale))
+        height = max(1, int(image.height * scale))
         image = image.resize((width, height), Image.BILINEAR)
     gray = ImageOps.autocontrast(image.convert("L"))
-    if TESSERACT_THRESHOLD is not None:
-        gray = gray.point(lambda p: 255 if p > TESSERACT_THRESHOLD else 0)
-    if TESSERACT_INVERT:
+    if threshold is not None:
+        gray = gray.point(lambda p: 255 if p > threshold else 0)
+    if invert:
         gray = ImageOps.invert(gray)
     return gray
 
@@ -62,22 +67,57 @@ def preprocess_for_tesseract(image: Image.Image):
 # 通用 OCR 读取函数
 def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST, label="unknown"):
     img = crop_region(frame, region) if frame is not None else ImageGrab.grab(bbox=region)
-    processed = preprocess_for_tesseract(img)
-    config = f"--psm {TESSERACT_PSM} --oem {TESSERACT_OEM} -c tessedit_char_whitelist={whitelist}"
-    text = pytesseract.image_to_string(processed, config=config, lang=TESSERACT_LANG).strip()
+    attempts = []
+    variant_settings = [
+        {"threshold": TESSERACT_THRESHOLD, "invert": TESSERACT_INVERT, "psm": TESSERACT_PSM},
+        {"threshold": None, "invert": TESSERACT_INVERT, "psm": TESSERACT_PSM},
+        {"threshold": TESSERACT_THRESHOLD, "invert": not TESSERACT_INVERT, "psm": 8},
+        {"threshold": None, "invert": not TESSERACT_INVERT, "psm": 8},
+    ]
 
-    text = text.replace("O", "0").replace("o", "0")
-    digits = "".join(c for c in text if c.isdigit())
+    for variant in variant_settings:
+        processed = preprocess_for_tesseract(
+            img,
+            threshold=variant["threshold"],
+            invert=variant["invert"],
+        )
+        config = (
+            f"--psm {variant['psm']} --oem {TESSERACT_OEM} "
+            f"-c tessedit_char_whitelist={whitelist}"
+        )
+        text = pytesseract.image_to_string(processed, config=config, lang=TESSERACT_LANG).strip()
+        text = text.replace("O", "0").replace("o", "0")
+        digits = "".join(c for c in text if c.isdigit())
+        attempts.append(
+            {
+                "raw_text": text,
+                "digits": digits,
+                "threshold": variant["threshold"],
+                "invert": variant["invert"],
+                "psm": variant["psm"],
+            }
+        )
+        if digits:
+            _record_ocr_debug(
+                label,
+                raw_text=text,
+                digits=digits,
+                region=region,
+                whitelist=whitelist,
+                attempts=attempts,
+            )
+            return digits
 
     _record_ocr_debug(
         label,
-        raw_text=text,
-        digits=digits,
+        raw_text=attempts[-1]["raw_text"] if attempts else "",
+        digits="",
         region=region,
         whitelist=whitelist,
+        attempts=attempts,
     )
 
-    return digits if digits else None
+    return None
 
 
 last_speed = None

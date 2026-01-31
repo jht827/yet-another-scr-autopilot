@@ -93,11 +93,18 @@ def _read_digits(image: Image.Image) -> str:
     return "".join(ch for ch in text if ch.isdigit())
 
 
-def _read_text(image: Image.Image, whitelist: str | None, allow_spaces: bool) -> str:
+def _read_text(
+    image: Image.Image,
+    whitelist: str | None,
+    allow_spaces: bool,
+    force_upper: bool = True,
+) -> str:
     config = f"--psm {ocr_config.TESSERACT_PSM}"
     if whitelist:
         config = f"{config} -c tessedit_char_whitelist={whitelist}"
-    text = pytesseract.image_to_string(image, config=config).upper()
+    text = pytesseract.image_to_string(image, config=config)
+    if force_upper:
+        text = text.upper()
     cleaned = " ".join(text.split())
     if not whitelist and not allow_spaces:
         return cleaned
@@ -105,6 +112,12 @@ def _read_text(image: Image.Image, whitelist: str | None, allow_spaces: bool) ->
     if allow_spaces:
         allowed.add(" ")
     return "".join(ch for ch in cleaned if ch in allowed)
+
+
+def _normalize_platform_number(raw_platform_number: str) -> str:
+    if raw_platform_number == "41":
+        return "1"
+    return raw_platform_number
 
 
 def _is_stopped(speed_value: int | None) -> bool:
@@ -299,11 +312,13 @@ def main() -> None:
                 raw_platform_number = _read_digits(
                     _preprocess(_crop(full, regions.platform_number))
                 )
+                raw_platform_number = _normalize_platform_number(raw_platform_number)
                 raw_route_number = _read_digits(_preprocess(_crop(full, regions.route_number)))
                 raw_next_station = _read_text(
                     _preprocess(_crop(full, regions.next_station)),
-                    whitelist=f"{ocr_config.ALPHANUM_WHITELIST} ",
+                    whitelist=f"{ocr_config.STATION_NAME_WHITELIST} ",
                     allow_spaces=True,
+                    force_upper=False,
                 )
                 status_state.last_platform_number_text = raw_platform_number
                 status_state.last_route_number_text = raw_route_number

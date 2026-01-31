@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 import ocr_config
 
+_DIGIT_CONFUSIONS = {
+    "2": ("7",),
+}
+
 
 @dataclass
 class DistanceState:
@@ -92,6 +96,26 @@ def _predict_distance(
     return last_value + (speed / 3600.0) * adjusted_delta
 
 
+def _best_distance_candidate(digits: str, prediction: float, tolerance: float) -> int | None:
+    if not digits:
+        return None
+    best_value = None
+    best_delta = None
+    for index, original in enumerate(digits):
+        for replacement in _DIGIT_CONFUSIONS.get(original, ()):
+            candidate_digits = f"{digits[:index]}{replacement}{digits[index + 1:]}"
+            candidate = _parse_int(candidate_digits)
+            if candidate is None:
+                continue
+            delta = abs(candidate - prediction)
+            if delta > tolerance:
+                continue
+            if best_delta is None or delta < best_delta:
+                best_delta = delta
+                best_value = candidate
+    return best_value
+
+
 def apply_distance_correction(
     raw_miles: str,
     state: DistanceState,
@@ -116,8 +140,13 @@ def apply_distance_correction(
     allow_jump = allow_reset and miles_value <= max_distance
 
     if abs(delta) > tolerance and not allow_jump:
-        miles_value = state.last_miles_value
-        state.miles_reject_streak += 1
+        candidate = _best_distance_candidate(miles_digits, prediction, tolerance)
+        if candidate is not None:
+            miles_value = candidate
+            state.miles_reject_streak = 0
+        else:
+            miles_value = state.last_miles_value
+            state.miles_reject_streak += 1
     else:
         state.miles_reject_streak = 0
 

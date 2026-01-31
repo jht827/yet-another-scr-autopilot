@@ -38,6 +38,8 @@ def region_provider(title_hint: str) -> WindowRegion:
 def capture_loop(title_hint: str, show_preview: bool) -> None:
     grabber = ScreenGrabber(lambda: region_provider(title_hint))
     grabber.start()
+    if show_preview:
+        cv2.namedWindow("Roblox Capture", cv2.WINDOW_NORMAL)
     print("Press 'b' to box ROI, 'q' to quit.")
     while True:
         sample = grabber.read_latest()
@@ -54,6 +56,7 @@ def capture_loop(title_hint: str, show_preview: bool) -> None:
             print("Normalized ROI:", selection.normalized)
         elif key == ord("q"):
             break
+        time.sleep(0.005)
     grabber.stop()
     cv2.destroyAllWindows()
 

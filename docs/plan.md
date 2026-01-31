@@ -8,17 +8,17 @@
   - **Full Line Data (FLD)**: deterministic driving from LineData files.
   - **Limited Line Data (LLD)**: partial route knowledge with physics-based stopping.
   - **RedCap (Reduced Capability)**: reactive-only mode using HUD speed/signal state.
-  - **Upgrade path**: template-matching a signal sequence to select LineData and upgrade to FLD.
+  - **Upgrade path**: OCR a signal sequence to select LineData and upgrade to FLD.
 
 ### Architectural Overview
 
 #### 1) Core Components
 - **Capture Pipeline**
   - Thread A: HUD capture (speed, speed limits, signal state).
-  - Thread B: Signal ID box capture for template matching.
+  - Thread B: Signal ID box capture for OCR.
   - Shared frame buffer with timestamps to keep data in sync.
 - **Perception Layer**
-  - Signal ID recognizer using icon/character template matching.
+  - Signal ID recognizer using OCR for alphanumeric IDs.
   - HUD parser for speed, current limit, and signal color/state.
   - Tesseract OCR tuned for speed with a strict `0-9 a-z` whitelist.
   - Fixed pixel ROI coordinates per HUD field (no normalized or dynamic ROI math in the OCR path).
@@ -111,9 +111,9 @@ SIG M380
    - Implement the LineData parser and validation first to establish the canonical route model.
 2. **Instrumentation + data collection tools**
    - Build a braking-curve collection harness per train profile (logging speed, decel, response lag).
-   - Build a LineData capture tool to place signals, distances, and platform markers.
+   - Build a LineData capture tool that OCRs HUD fields and integrates speed to estimate distances.
 3. **Perception layer**
-   - Add Tesseract-based HUD OCR and signal ID template matching after the route model exists.
+   - Add Tesseract-based HUD OCR and signal ID OCR after the route model exists.
 4. **Control loop + safety**
    - Wire in braking curves, response lag modeling, and conservative fallbacks.
 5. **Mode manager + upgrades**
@@ -136,8 +136,8 @@ SIG M380
 1. **Telemetry + Capture**
    - HUD capture loop with image normalization.
    - Signal ID ROI capture with fixed crop box.
-2. **Template Matching**
-   - Offline template library for alphanumeric signal characters.
+2. **Signal ID OCR**
+   - OCR-based signal ID recognition with ROI-specific preprocessing and strict whitelists.
    - Confidence thresholding and debounce on recognitions.
 3. **Tesseract OCR Parsing**
    - Fixed pixel ROIs for speed, limits, and HUD indicators.

@@ -3,14 +3,19 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Iterator, Tuple
 
 import mss
 import pytesseract
 from PIL import Image, ImageChops, ImageOps
 
 import ocr_config
-from ocr_corrections import DistanceState, SpeedState, apply_distance_correction, apply_speed_correction
+from .ocr_corrections import (
+    DistanceState,
+    SpeedState,
+    apply_distance_correction,
+    apply_speed_correction,
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,18 @@ class StatusState:
     frame_count: int = 0
     fps: float = 0.0
     last_slow_read: float = 0.0
+
+
+@dataclass
+class OcrReading:
+    speed_value: int | None
+    miles_value: int | None
+    next_signal_number: str
+    next_signal_distance_value: int | None
+    platform_number: str
+    route_number: str
+    next_station: str
+    timestamp: float
 
 
 def _apply_ocr_settings() -> None:
@@ -237,7 +254,8 @@ def _allow_distance_reset(state: CorrectionState, now: float) -> bool:
     ) >= ocr_config.MIN_SPEED_STABLE_FOR_RESET_SEC
 
 
-def main() -> None:
+def stream_ocr(print_status: bool = True) -> Iterator[OcrReading]:
+    """Yield OCR readings continuously."""
     _apply_ocr_settings()
     regions = Regions(
         speed=ocr_config.REGION_SPEED,
@@ -329,7 +347,7 @@ def main() -> None:
             next_station = status_state.last_next_station_text or ""
             _update_fps(status_state, now)
 
-            if _should_print(
+            if print_status and _should_print(
                 status_state,
                 speed,
                 miles,
@@ -360,6 +378,19 @@ def main() -> None:
                 status_state.last_route_number_text = route_number
                 status_state.last_next_station_text = next_station
 
+            reading = OcrReading(
+                speed_value=speed_value,
+                miles_value=miles_value,
+                next_signal_number=next_signal_number,
+                next_signal_distance_value=next_signal_distance_value,
+                platform_number=platform_number,
+                route_number=route_number,
+                next_station=next_station,
+                timestamp=now,
+            )
+
+            yield reading
+
             loop_end = time.perf_counter()
             # Sleep only if we're faster than the target FPS.
             sleep_for = target_frame_time - (loop_end - loop_start)
@@ -368,4 +399,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    for _reading in stream_ocr(print_status=True):
+        pass

@@ -24,6 +24,7 @@ class SpeedState:
 
 
 def _parse_int(text: str) -> int | None:
+    # Convert numeric strings to ints, returning None on empty/invalid input.
     if not text:
         return None
     try:
@@ -33,10 +34,12 @@ def _parse_int(text: str) -> int | None:
 
 
 def _digits_only(text: str) -> str:
+    # Strip non-numeric characters from OCR output.
     return "".join(ch for ch in text if ch.isdigit())
 
 
 def clamp_distance_digits(text: str) -> str:
+    # Enforce the expected max digit width for distance values.
     digits = _digits_only(text)
     if len(digits) <= ocr_config.MAX_DISTANCE_DIGITS:
         return digits
@@ -80,6 +83,7 @@ def apply_speed_correction(raw_speed: str, state: SpeedState, delta_t: float) ->
 
 
 def _distance_tolerance(speed_value: int | None) -> float:
+    # Allow larger distance deltas at higher speeds.
     speed = speed_value or 0
     return ocr_config.DISTANCE_BASE_TOLERANCE + (speed * ocr_config.DISTANCE_TOLERANCE_PER_MPH)
 
@@ -96,6 +100,7 @@ def _predict_distance(
 
 
 def _best_distance_candidate(digits: str, prediction: float, tolerance: float) -> int | None:
+    # Search for a single-digit substitution that stays within tolerance.
     if not digits:
         return None
     best_value = None
@@ -116,6 +121,7 @@ def _best_distance_candidate(digits: str, prediction: float, tolerance: float) -
 
 
 def _should_fix_07x_to_02x(miles_digits: str, state: DistanceState) -> bool:
+    # Fix common OCR confusion where "02x" appears as "07x" after "03x" readings.
     if len(miles_digits) != ocr_config.MAX_DISTANCE_DIGITS:
         return False
     if not miles_digits.startswith("07"):
@@ -138,6 +144,7 @@ def apply_distance_correction(
     raw_digits = clamp_distance_digits(raw_miles)
     miles_digits = raw_digits
     if _should_fix_07x_to_02x(miles_digits, state):
+        # Apply the correction before parsing to keep history consistent.
         miles_digits = f"02{miles_digits[2]}"
     state.recent_raw_miles.append(raw_digits)
     if len(state.recent_raw_miles) > ocr_config.DISTANCE_07X_FIX_LOOKBACK:

@@ -2,7 +2,7 @@ import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Callable, Dict, Iterable, Optional, Tuple
 
 import cv2
 import mss
@@ -12,6 +12,7 @@ from scr_autopilot.vision import (
     NormalizedRoi,
     ScreenGrabber,
     WindowRegion,
+    find_window_region,
     load_templates,
     preprocess_for_ocr,
     roi_from_normalized,
@@ -59,6 +60,45 @@ def resolve_region(args: argparse.Namespace) -> WindowRegion:
             width=int(monitor["width"]),
             height=int(monitor["height"]),
         )
+
+
+def debug_log(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"[debug] {message}")
+
+
+def build_region_provider(
+    args: argparse.Namespace,
+    log: Callable[[str], None],
+) -> Callable[[], WindowRegion]:
+    fallback = resolve_region(args)
+    if args.no_window or not args.window_title:
+        log(f"Using fixed region: {fallback}")
+        return lambda: fallback
+
+    last_region = fallback
+    last_error: Optional[str] = None
+    last_refresh = 0.0
+
+    def provider() -> WindowRegion:
+        nonlocal last_region, last_error, last_refresh
+        now = time.time()
+        if now - last_refresh < args.window_refresh:
+            return last_region
+        last_refresh = now
+        try:
+            last_region = find_window_region(args.window_title)
+            if last_error:
+                log("Window capture recovered.")
+            last_error = None
+        except RuntimeError as exc:
+            if str(exc) != last_error:
+                log(f"Window capture failed: {exc}. Falling back to {last_region}.")
+                last_error = str(exc)
+        return last_region
+
+    log(f"Attempting to capture window matching '{args.window_title}'.")
+    return provider
 
 
 def clamp_roi(frame: np.ndarray, roi: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
@@ -157,25 +197,69 @@ def main() -> None:
         default=0.5,
         help="Minimum template score to accept a digit.",
     )
+    parser.add_argument(
+        "--window-title",
+        default="Roblox",
+        help="Window title/owner hint to capture (default: Roblox).",
+    )
+    parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="Disable window capture and use monitor/region instead.",
+    )
+    parser.add_argument(
+        "--window-refresh",
+        type=float,
+        default=1.0,
+        help="Seconds between window region refreshes when using --window-title.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging about capture status and frame timing.",
+    )
+    parser.add_argument(
+        "--debug-dir",
+        type=Path,
+        help="Optional folder to dump a full frame + ROI crops for debugging.",
+    )
     args = parser.parse_args()
 
     templates = load_templates(args.templates)
     if not templates:
         raise RuntimeError(f"No templates found in {args.templates} (expected *.png files).")
 
-    region = resolve_region(args)
-    grabber = ScreenGrabber(lambda: region)
+    log = lambda message: debug_log(args.debug, message)
+    region_provider = build_region_provider(args, log)
+    grabber = ScreenGrabber(region_provider)
     grabber.start()
+    debug_dumped = False
+    last_debug = 0.0
+    last_sample_time: Optional[float] = None
     try:
         while True:
             sample = grabber.read_latest()
             if sample is None:
+                if args.debug and time.time() - last_debug > 1.0:
+                    log("Waiting for first frame...")
+                    last_debug = time.time()
                 time.sleep(0.01)
                 continue
             frame = sample.frame
+            region = region_provider()
             speed_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.speed))
             limit_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.limit))
             distance_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.distance))
+            if args.debug_dir and not debug_dumped:
+                args.debug_dir.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(args.debug_dir / "frame.png"), frame)
+                if speed_roi is not None:
+                    cv2.imwrite(str(args.debug_dir / "speed_roi.png"), speed_roi)
+                if limit_roi is not None:
+                    cv2.imwrite(str(args.debug_dir / "limit_roi.png"), limit_roi)
+                if distance_roi is not None:
+                    cv2.imwrite(str(args.debug_dir / "distance_roi.png"), distance_roi)
+                debug_dumped = True
 
             speed_label, speed_score = ("", 0.0)
             limit_label, limit_score = ("", 0.0)
@@ -196,6 +280,20 @@ def main() -> None:
                 f"Next Station: {distance_value}"
             )
             print(f"\r{line:<80}", end="", flush=True)
+            if args.debug and time.time() - last_debug > 1.0:
+                now = time.time()
+                frame_age = now - sample.timestamp
+                fps = 0.0
+                if last_sample_time is not None:
+                    fps = 1.0 / max(now - last_sample_time, 1e-6)
+                last_sample_time = now
+                mean_luma = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                log(
+                    "Frame ok | "
+                    f"region={region.width}x{region.height}+{region.left},{region.top} | "
+                    f"age={frame_age:.3f}s | fps≈{fps:.1f} | mean_luma={mean_luma:.1f}"
+                )
+                last_debug = now
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\nStopping HUD reader.")

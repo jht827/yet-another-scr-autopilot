@@ -53,6 +53,31 @@ def roi_to_normalized(region: WindowRegion, roi: Tuple[int, int, int, int]) -> N
     )
 
 
+def find_window_region(title_hint: str) -> WindowRegion:
+    """Locate a window by title/owner hint and return its bounding region."""
+    try:
+        import Quartz  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - platform dependency
+        raise RuntimeError(
+            "Window capture requires Quartz on macOS. Install pyobjc with `pip install pyobjc`."
+        ) from exc
+
+    options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+    window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+    for window in window_list:
+        window_title = window.get("kCGWindowName", "") or ""
+        owner_name = window.get("kCGWindowOwnerName", "") or ""
+        if title_hint.lower() in window_title.lower() or title_hint.lower() in owner_name.lower():
+            bounds = window.get("kCGWindowBounds", {})
+            return WindowRegion(
+                left=int(bounds.get("X", 0)),
+                top=int(bounds.get("Y", 0)),
+                width=int(bounds.get("Width", 0)),
+                height=int(bounds.get("Height", 0)),
+            )
+    raise RuntimeError(f"Window matching '{title_hint}' not found.")
+
+
 class ScreenGrabber:
     """Low-latency screen capture for a window region using MSS."""
 

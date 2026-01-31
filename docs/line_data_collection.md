@@ -22,6 +22,10 @@ distance-to-next-station, then integrates speed over time to estimate distance b
      --config config/line_data_config.json \
      --output recordings/line_data_events.csv
    ```
+   While collecting, use hotkeys for manual markers:
+   - `P` toggles platform start/end markers.
+   - `2`-`6` record stop marker positions.
+   - `9` records the `S` stop marker.
 
 ## Output
 The CSV output logs an event when a watched field changes (signal ID, next stop, platform).
@@ -42,6 +46,8 @@ Use the event distances to assemble `SIG`, `DIST`, and `STOP` nodes for LineData
 - `window_title` must match the Roblox window title so capture is scoped to that window.
   The matcher looks for the title as a substring (case-insensitive).
 - `window_bbox` can be set manually as `[left, top, right, bottom]` if window lookup fails.
+  If the window cannot be found, the collector prompts before falling back to full-screen
+  coordinates.
 
 ## Dependencies
 - `pytesseract` + Tesseract installation for OCR.

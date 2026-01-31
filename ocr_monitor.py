@@ -99,7 +99,9 @@ def main() -> None:
     last_miles_value: int | None = None
     last_status = 0.0
     last_update = time.perf_counter()
+    last_miles_update = last_update
     stop_start: float | None = None
+    miles_anomaly_start: float | None = None
     single_digit_streak = 0
     frame_count = 0
     fps_timer = time.perf_counter()
@@ -147,23 +149,33 @@ def main() -> None:
 
             if miles_value is not None:
                 if last_miles_value is not None:
-                    max_drop = ocr_config.MAX_DISTANCE_DROP_PER_SEC * delta_t
-                    max_rise = ocr_config.MAX_DISTANCE_RISE_PER_SEC * delta_t
+                    miles_delta_t = max(0.001, now - last_miles_update)
+                    max_drop = ocr_config.MAX_DISTANCE_DROP_PER_SEC * miles_delta_t
+                    max_rise = ocr_config.MAX_DISTANCE_RISE_PER_SEC * miles_delta_t
                     delta = miles_value - last_miles_value
                     allow_reset = (
                         stop_start is not None
                         and (now - stop_start) >= ocr_config.MIN_SPEED_STABLE_FOR_RESET_SEC
                     )
-                    if delta > max_rise and not allow_reset:
-                        miles_value = last_miles_value
-                    if delta < -max_drop and not allow_reset:
-                        miles_value = last_miles_value
+                    if (delta > max_rise or delta < -max_drop) and not allow_reset:
+                        if miles_anomaly_start is None:
+                            miles_anomaly_start = now
+                        if (now - miles_anomaly_start) < 3.0:
+                            miles_value = last_miles_value
+                        else:
+                            miles_anomaly_start = None
+                    else:
+                        miles_anomaly_start = None
+                else:
+                    miles_anomaly_start = None
 
             speed = f"{speed_value}" if speed_value is not None else ""
             miles = f"{miles_value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if miles_value is not None else ""
             if speed_value is not None:
                 last_speed_value = speed_value
             if miles_value is not None:
+                if last_miles_value is None or miles_value != last_miles_value:
+                    last_miles_update = now
                 last_miles_value = miles_value
             frame_count += 1
             elapsed = now - fps_timer

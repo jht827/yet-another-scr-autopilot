@@ -56,3 +56,15 @@ python scr_autopilot/accel_curve.py --output-csv accel_curve.csv
 ```
 
 Adjust the sample interval, smoothing window, and OCR settings in `scr_autopilot.toml`.
+
+## Auto braking helper
+
+Compute a braking command from the HUD speed and 3-digit distance readout (where the
+last two digits are decimal places, e.g. `300` → 3.00 miles):
+
+```bash
+python auto_brake.py --speed-mph 45 --distance-raw 300
+```
+
+The script reads a linear braking curve CSV (default:
+`train_curves/357/decel_linear.csv`) and exposes tweakable parameters via CLI flags.

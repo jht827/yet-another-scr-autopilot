@@ -3,7 +3,7 @@
 ## Detailed Software Plan
 
 ### Goals
-- Build an autopilot for Stepford County Railway (SCR) that can safely transition between **full automation** and **reactive fallback** using Signal IDs and distance anchors instead of flaky OCR.
+- Build an autopilot for Stepford County Railway (SCR) that can safely transition between **full automation** and **reactive fallback** using Signal IDs and distance anchors, while keeping HUD OCR simple and fast with Tesseract.
 - Implement a **multi-tiered intelligence model**:
   - **Full Line Data (FLD)**: deterministic driving from LineData files.
   - **Limited Line Data (LLD)**: partial route knowledge with physics-based stopping.
@@ -20,10 +20,8 @@
 - **Perception Layer**
   - Signal ID recognizer using icon/character template matching.
   - HUD parser for speed, current limit, and signal color/state.
-  - OpenCV-based OCR-like detection for HUD elements using:
-    - ROI templates + normalized cross-correlation for digits and icons.
-    - Adaptive thresholding and contour filtering for digit segmentation.
-    - Frame-to-frame voting to stabilize real-time readings.
+  - Tesseract OCR tuned for speed with a strict `0-9 a-z` whitelist.
+  - Fixed pixel ROI coordinates per HUD field (no normalized or dynamic ROI math in the OCR path).
 - **World Model**
   - Route state machine with current section, next signal, platform stops.
   - Distance accumulator driven by physics integration (speed * delta_t).
@@ -115,7 +113,7 @@ SIG M380
    - Build a braking-curve collection harness per train profile (logging speed, decel, response lag).
    - Build a LineData capture tool to place signals, distances, and platform markers.
 3. **Perception layer**
-   - Add OpenCV OCR-like parsing and signal ID template matching after the route model exists.
+   - Add Tesseract-based HUD OCR and signal ID template matching after the route model exists.
 4. **Control loop + safety**
    - Wire in braking curves, response lag modeling, and conservative fallbacks.
 5. **Mode manager + upgrades**
@@ -141,10 +139,10 @@ SIG M380
 2. **Template Matching**
    - Offline template library for alphanumeric signal characters.
    - Confidence thresholding and debounce on recognitions.
-3. **OpenCV OCR-Like Parsing**
-   - ROI-based digit segmentation (adaptive threshold + contours).
-   - Template-matched digits for speed, limits, and HUD indicators.
-   - Temporal smoothing for stable, real-time readouts.
+3. **Tesseract OCR Parsing**
+   - Fixed pixel ROIs for speed, limits, and HUD indicators.
+   - Minimal preprocessing (scale, threshold, optional invert) before Tesseract.
+   - Character whitelist restricted to `0-9 a-z` to maximize speed.
 4. **LineData Parser**
    - Read files into a route graph of ordered nodes.
    - Validate sections and compute cumulative distances.

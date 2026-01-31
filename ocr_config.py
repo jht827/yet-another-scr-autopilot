@@ -30,3 +30,7 @@ STOP_SPEED_THRESHOLD = 1  # Consider stopped if speed <= this value.
 MAX_SPEED_DELTA_PER_SEC = 15.0  # Speed should change roughly linearly.
 SINGLE_DIGIT_SPEED_IF_PREV_HIGH = 80  # Reject single digit if previous >= this.
 SINGLE_DIGIT_CONFIRM_FRAMES = 2  # Accept single digit only after N repeats.
+
+# Correction backoff
+MAX_SPEED_REJECT_FRAMES = 6  # Allow realtime speed after too many rejections.
+MAX_DISTANCE_REJECT_FRAMES = 6  # Allow realtime distance after too many rejections.

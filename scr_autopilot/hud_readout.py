@@ -2,49 +2,36 @@ import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Optional, Tuple
+from typing import Callable, Optional
 
-import cv2
 import mss
 import numpy as np
+import pytesseract
+from PIL import Image, ImageOps
 
-from scr_autopilot.vision import (
-    NormalizedRoi,
-    ScreenGrabber,
-    WindowRegion,
-    find_window_region,
-    load_templates,
-    preprocess_for_ocr,
-    roi_from_normalized,
-)
+from scr_autopilot.vision import ScreenGrabber, WindowRegion, find_window_region
+
+
+@dataclass(frozen=True)
+class PixelRoi:
+    x: int
+    y: int
+    width: int
+    height: int
 
 
 @dataclass(frozen=True)
 class HudRois:
-    speed: NormalizedRoi
-    limit: NormalizedRoi
-    distance: NormalizedRoi
+    speed: PixelRoi
+    limit: PixelRoi
+    distance: PixelRoi
 
 
+DEFAULT_REFERENCE_SIZE = (1920, 1080)
 DEFAULT_ROIS = HudRois(
-    speed=NormalizedRoi(
-        x=0.5218560860793544,
-        y=0.5764462809917356,
-        width=0.0484196368527236,
-        height=0.045454545454545456,
-    ),
-    limit=NormalizedRoi(
-        x=0.5292535305985205,
-        y=0.6539256198347108,
-        width=0.03227975790181574,
-        height=0.03409090909090909,
-    ),
-    distance=NormalizedRoi(
-        x=-0.006724949562878279,
-        y=0.6590909090909091,
-        width=0.02824478816408877,
-        height=0.01962809917355372,
-    ),
+    speed=PixelRoi(x=1002, y=623, width=93, height=49),
+    limit=PixelRoi(x=1016, y=706, width=62, height=37),
+    distance=PixelRoi(x=-13, y=712, width=54, height=21),
 )
 
 
@@ -101,79 +88,87 @@ def build_region_provider(
     return provider
 
 
-def clamp_roi(frame: np.ndarray, roi: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
-    x, y, w, h = roi
-    x0 = max(x, 0)
-    y0 = max(y, 0)
-    x1 = min(x + w, frame.shape[1])
-    y1 = min(y + h, frame.shape[0])
+def clamp_roi(frame: np.ndarray, roi: PixelRoi) -> Optional[np.ndarray]:
+    x0 = max(roi.x, 0)
+    y0 = max(roi.y, 0)
+    x1 = min(roi.x + roi.width, frame.shape[1])
+    y1 = min(roi.y + roi.height, frame.shape[0])
     if x1 <= x0 or y1 <= y0:
         return None
     return frame[y0:y1, x0:x1]
 
 
-def segment_digits(binary: np.ndarray) -> Iterable[np.ndarray]:
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return []
-    height, width = binary.shape[:2]
-    min_height = max(6, int(height * 0.4))
-    min_area = int(height * width * 0.01)
-    boxes = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if h < min_height or w < 3:
+def parse_roi(value: Optional[str], default: PixelRoi) -> PixelRoi:
+    if not value:
+        return default
+    x, y, w, h = (int(part) for part in value.split(","))
+    return PixelRoi(x=x, y=y, width=w, height=h)
+
+
+def to_pil(frame: np.ndarray) -> Image.Image:
+    return Image.fromarray(frame[:, :, ::-1])
+
+
+def preprocess_for_tesseract(
+    roi: np.ndarray,
+    threshold: Optional[int],
+    invert: bool,
+    scale: float,
+) -> Image.Image:
+    image = to_pil(roi)
+    if scale != 1.0:
+        width = max(1, int(image.width * scale))
+        height = max(1, int(image.height * scale))
+        image = image.resize((width, height), Image.BILINEAR)
+    gray = ImageOps.autocontrast(image.convert("L"))
+    if threshold is not None:
+        gray = gray.point(lambda p: 255 if p > threshold else 0)
+    if invert:
+        gray = ImageOps.invert(gray)
+    return gray
+
+
+def tesseract_config(args: argparse.Namespace) -> str:
+    return (
+        f"--psm {args.tesseract_psm} --oem {args.tesseract_oem} "
+        f"-c tessedit_char_whitelist={args.whitelist}"
+    )
+
+
+def read_roi_text(roi: np.ndarray, args: argparse.Namespace) -> str:
+    processed = preprocess_for_tesseract(roi, args.threshold, args.invert, args.scale)
+    text = pytesseract.image_to_string(processed, config=tesseract_config(args), lang=args.lang)
+    cleaned = "".join(char for char in text.strip().lower() if char.isalnum())
+    return cleaned
+
+
+def maybe_dump_debug(
+    debug_dir: Optional[Path],
+    frame: np.ndarray,
+    rois: dict[str, Optional[np.ndarray]],
+    args: argparse.Namespace,
+    dumped: bool,
+) -> bool:
+    if not debug_dir or dumped:
+        return dumped
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    to_pil(frame).save(debug_dir / "frame.png")
+    for name, roi in rois.items():
+        if roi is None:
             continue
-        if w * h < min_area:
-            continue
-        boxes.append((x, y, w, h))
-    boxes.sort(key=lambda box: box[0])
-    return [binary[y : y + h, x : x + w] for x, y, w, h in boxes]
+        to_pil(roi).save(debug_dir / f"{name}.png")
+        processed = preprocess_for_tesseract(roi, args.threshold, args.invert, args.scale)
+        processed.save(debug_dir / f"{name}_ocr.png")
+    return True
 
 
-def match_digit(digit: np.ndarray, templates: Dict[str, np.ndarray]) -> Tuple[str, float]:
-    best_label = "?"
-    best_score = -1.0
-    if not templates:
-        return best_label, best_score
-    template_shape = next(iter(templates.values())).shape[::-1]
-    resized = cv2.resize(digit, template_shape)
-    for label, template in templates.items():
-        result = cv2.matchTemplate(resized, template, cv2.TM_CCOEFF_NORMED)
-        _, score, _, _ = cv2.minMaxLoc(result)
-        if score > best_score:
-            best_label = label
-            best_score = float(score)
-    return best_label, best_score
-
-
-def decode_roi(roi: np.ndarray, templates: Dict[str, np.ndarray]) -> Tuple[str, float]:
-    processed = preprocess_for_ocr(roi)
-    digits = segment_digits(processed)
-    if not digits:
-        return "", 0.0
-    labels: list[str] = []
-    scores: list[float] = []
-    for digit in digits:
-        label, score = match_digit(digit, templates)
-        labels.append(label)
-        scores.append(score)
-    return "".join(labels), float(min(scores)) if scores else 0.0
-
-
-def format_value(label: str, score: float, threshold: float) -> str:
-    if not label or score < threshold:
-        return "--"
-    return label
+def format_value(value: str) -> str:
+    return value if value else "--"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read HUD values from normalized ROIs.")
-    parser.add_argument(
-        "--templates",
-        type=Path,
-        required=True,
-        help="Folder with digit templates (0.png-9.png) for OCR matching.",
+    parser = argparse.ArgumentParser(
+        description="Read HUD values from fixed pixel ROIs using Tesseract OCR.",
     )
     parser.add_argument(
         "--monitor",
@@ -192,10 +187,64 @@ def main() -> None:
         help="Seconds between terminal updates.",
     )
     parser.add_argument(
-        "--min-score",
+        "--speed-roi",
+        help=(
+            "Absolute ROI for speed as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--limit-roi",
+        help=(
+            "Absolute ROI for speed limit as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--distance-roi",
+        help=(
+            "Absolute ROI for next-station distance as 'x,y,width,height' relative to capture region. "
+            f"Default is tuned for {DEFAULT_REFERENCE_SIZE[0]}x{DEFAULT_REFERENCE_SIZE[1]}."
+        ),
+    )
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=160,
+        help="Binarization threshold (0-255). Set to -1 to disable thresholding.",
+    )
+    parser.add_argument(
+        "--invert",
+        action="store_true",
+        help="Invert ROI colors before OCR.",
+    )
+    parser.add_argument(
+        "--scale",
         type=float,
-        default=0.5,
-        help="Minimum template score to accept a digit.",
+        default=2.0,
+        help="Scale factor before OCR (higher can improve accuracy).",
+    )
+    parser.add_argument(
+        "--whitelist",
+        default="0123456789abcdefghijklmnopqrstuvwxyz",
+        help="Tesseract whitelist for allowed characters.",
+    )
+    parser.add_argument(
+        "--lang",
+        default="eng",
+        help="Tesseract language to use (default: eng).",
+    )
+    parser.add_argument(
+        "--tesseract-psm",
+        type=int,
+        default=7,
+        help="Tesseract page segmentation mode (PSM).",
+    )
+    parser.add_argument(
+        "--tesseract-oem",
+        type=int,
+        default=1,
+        help="Tesseract OCR engine mode (OEM).",
     )
     parser.add_argument(
         "--window-title",
@@ -225,9 +274,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    templates = load_templates(args.templates)
-    if not templates:
-        raise RuntimeError(f"No templates found in {args.templates} (expected *.png files).")
+    threshold = None if args.threshold < 0 else args.threshold
+    args.threshold = threshold
+
+    rois = HudRois(
+        speed=parse_roi(args.speed_roi, DEFAULT_ROIS.speed),
+        limit=parse_roi(args.limit_roi, DEFAULT_ROIS.limit),
+        distance=parse_roi(args.distance_roi, DEFAULT_ROIS.distance),
+    )
 
     log = lambda message: debug_log(args.debug, message)
     region_provider = build_region_provider(args, log)
@@ -247,33 +301,22 @@ def main() -> None:
                 continue
             frame = sample.frame
             region = region_provider()
-            speed_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.speed))
-            limit_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.limit))
-            distance_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.distance))
-            if args.debug_dir and not debug_dumped:
-                args.debug_dir.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(args.debug_dir / "frame.png"), frame)
-                if speed_roi is not None:
-                    cv2.imwrite(str(args.debug_dir / "speed_roi.png"), speed_roi)
-                if limit_roi is not None:
-                    cv2.imwrite(str(args.debug_dir / "limit_roi.png"), limit_roi)
-                if distance_roi is not None:
-                    cv2.imwrite(str(args.debug_dir / "distance_roi.png"), distance_roi)
-                debug_dumped = True
+            speed_roi = clamp_roi(frame, rois.speed)
+            limit_roi = clamp_roi(frame, rois.limit)
+            distance_roi = clamp_roi(frame, rois.distance)
+            debug_dumped = maybe_dump_debug(
+                args.debug_dir,
+                frame,
+                {"speed_roi": speed_roi, "limit_roi": limit_roi, "distance_roi": distance_roi},
+                args,
+                debug_dumped,
+            )
 
-            speed_label, speed_score = ("", 0.0)
-            limit_label, limit_score = ("", 0.0)
-            distance_label, distance_score = ("", 0.0)
-            if speed_roi is not None:
-                speed_label, speed_score = decode_roi(speed_roi, templates)
-            if limit_roi is not None:
-                limit_label, limit_score = decode_roi(limit_roi, templates)
-            if distance_roi is not None:
-                distance_label, distance_score = decode_roi(distance_roi, templates)
-
-            speed_value = format_value(speed_label, speed_score, args.min_score)
-            limit_value = format_value(limit_label, limit_score, args.min_score)
-            distance_value = format_value(distance_label, distance_score, args.min_score)
+            speed_value = format_value(read_roi_text(speed_roi, args) if speed_roi is not None else "")
+            limit_value = format_value(read_roi_text(limit_roi, args) if limit_roi is not None else "")
+            distance_value = format_value(
+                read_roi_text(distance_roi, args) if distance_roi is not None else ""
+            )
 
             line = (
                 f"Speed: {speed_value} | Limit: {limit_value} | "
@@ -287,7 +330,7 @@ def main() -> None:
                 if last_sample_time is not None:
                     fps = 1.0 / max(now - last_sample_time, 1e-6)
                 last_sample_time = now
-                mean_luma = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                mean_luma = float(np.mean(frame[:, :, 0]))
                 log(
                     "Frame ok | "
                     f"region={region.width}x{region.height}+{region.left},{region.top} | "

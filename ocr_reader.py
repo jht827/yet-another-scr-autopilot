@@ -1,9 +1,13 @@
-### file: ocr_reader.py
 import pytesseract
 from PIL import ImageGrab
 import numpy as np
 import cv2
 import time
+import re
+import pyautogui
+from pynput.keyboard import Controller
+
+from config import REGION_DOOR_STATUS, REGION_SELECT_DESTINATION, SELECT_DESTINATION_INTERVAL
 
 # 通用 OCR 读取函数
 def read_number_raw(region):
@@ -23,8 +27,10 @@ def read_number_raw(region):
         print(f"[x] OCR failed: '{text}'")
         return None
 
+
 last_speed = None
 last_speed_time = 0
+
 
 def read_speed(region):
     global last_speed, last_speed_time
@@ -56,6 +62,7 @@ def read_speed(region):
 
 
 distance_history = []
+
 
 def read_distance(region):
     global distance_history
@@ -90,11 +97,9 @@ def read_distance(region):
         return None
     return corrected
 
-import re
 
 def should_press_door_keys():
-    region = (1223, 13, 1335, 31)
-    img = ImageGrab.grab(bbox=region)
+    img = ImageGrab.grab(bbox=REGION_DOOR_STATUS)
     text = pytesseract.image_to_string(img, config='--psm 6').strip().lower()
     clean_text = re.sub(r'[^a-z ]', '', text)  # remove numbers/symbols
 
@@ -105,17 +110,16 @@ def should_press_door_keys():
         print(f"[x] 'Door Closed' not detected: '{text}'")
         return False
 
-import pyautogui
 
 last_select_check_time = 0
 
-def check_select_destination_trigger(now, interval=60):
+
+def check_select_destination_trigger(now, interval=SELECT_DESTINATION_INTERVAL):
     global last_select_check_time
     if now - last_select_check_time < interval:
         return
 
-    region = (676, 57, 854, 80)
-    img = ImageGrab.grab(bbox=region)
+    img = ImageGrab.grab(bbox=REGION_SELECT_DESTINATION)
     text = pytesseract.image_to_string(img, config='--psm 6').strip().lower()
 
     if "select destination" in text:
@@ -153,7 +157,6 @@ def check_select_destination_trigger(now, interval=60):
         time.sleep(10.0)
 
         # Hold P for 3s
-        from pynput.keyboard import Controller
         keyboard = Controller()
         keyboard.press('p')
         keyboard.press('o')
@@ -167,4 +170,3 @@ def check_select_destination_trigger(now, interval=60):
         print("[ ] 'Select Destination' not detected")
 
     last_select_check_time = now
-

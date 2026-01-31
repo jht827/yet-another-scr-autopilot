@@ -6,13 +6,18 @@ from brake_control import issue_brake, release_brake_keys
 from ocr_reader import read_speed, read_distance, should_press_door_keys, check_select_destination_trigger
 
 from curve_calc import braking_distance
-
-# Constants
-REGION_SPEED = (804, 1350, 860, 1379)
-REGION_MILES = (1168, 1388, 1225, 1409)
-MPH_TO_MPS = 0.44704
-MILES_TO_METERS = 1609.34
-COOLDOWN = 3.0
+from config import (
+    REGION_SPEED,
+    REGION_MILES,
+    MPH_TO_MPS,
+    MILES_TO_METERS,
+    COOLDOWN,
+    TQ_PRESS_INTERVAL,
+    W_PRESS_COOLDOWN,
+    STOPPED_W_PRESS_DELAY,
+    STOPPED_W_PRESS_DURATION,
+    DOOR_KEY_PRESS_DURATION,
+)
 
 # State
 keyboard = Controller()
@@ -20,8 +25,8 @@ brake_disabled = False
 last_trigger_time = 0
 last_keypress_time = 0
 last_nonzero_speed_time = time.time()
-w_press_cooldown = 35  # Prevent spamming W every cycle
 last_w_press_time = 0
+
 
 def on_press(key):
     global brake_disabled
@@ -35,6 +40,7 @@ def on_press(key):
     except AttributeError:
         pass
 
+
 listener = Listener(on_press=on_press)
 listener.start()
 
@@ -46,7 +52,7 @@ try:
         check_select_destination_trigger(now)
 
         # Smash T and Q every 1 second
-        if now - last_keypress_time > 1.0:
+        if now - last_keypress_time > TQ_PRESS_INTERVAL:
             print("[TQ] Pressing T and Q")
             keyboard.press('t')
             keyboard.release('t')
@@ -59,7 +65,7 @@ try:
             print("[!] 'Door Closed' detected — pressing W + D for 2s")
             keyboard.press('w')
             keyboard.press('d')
-            time.sleep(2)
+            time.sleep(DOOR_KEY_PRESS_DURATION)
             keyboard.release('w')
             keyboard.release('d')
 
@@ -73,10 +79,14 @@ try:
             last_nonzero_speed_time = now
 
         # If speed has stayed at 0 for over 30s, press W
-        if speed_mph == 0 and (now - last_nonzero_speed_time > 30) and (now - last_w_press_time > w_press_cooldown):
+        if (
+            speed_mph == 0
+            and (now - last_nonzero_speed_time > STOPPED_W_PRESS_DELAY)
+            and (now - last_w_press_time > W_PRESS_COOLDOWN)
+        ):
             print("[W] Speed 0 for 30s — pressing W for 2.5s")
             keyboard.press('w')
-            time.sleep(2.5)
+            time.sleep(STOPPED_W_PRESS_DURATION)
             keyboard.release('w')
             last_w_press_time = now
 
@@ -110,4 +120,3 @@ except KeyboardInterrupt:
     print("Stopped. Cleaning up...")
     release_brake_keys()
     listener.stop()
-

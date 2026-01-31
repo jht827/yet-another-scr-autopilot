@@ -5,7 +5,12 @@ import re
 import pyautogui
 from pynput.keyboard import Controller
 
-from config import REGION_DOOR_STATUS, REGION_SELECT_DESTINATION, SELECT_DESTINATION_INTERVAL
+from config import (
+    REGION_DOOR_STATUS,
+    REGION_SELECT_DESTINATION,
+    SELECT_DESTINATION_INTERVAL,
+    DEBUG_OCR,
+)
 
 # OCR settings borrowed from discarded/old logic
 TESSERACT_SCALE = 2.0
@@ -16,6 +21,21 @@ TESSERACT_PSM = 7
 TESSERACT_OEM = 1
 
 NUMERIC_WHITELIST = "0123456789"
+
+_last_ocr_debug = {}
+
+
+def _record_ocr_debug(label, **data):
+    if not DEBUG_OCR:
+        return
+    entry = _last_ocr_debug.get(label, {})
+    entry.update(data)
+    entry["timestamp"] = time.time()
+    _last_ocr_debug[label] = entry
+
+
+def get_last_ocr_debug(label):
+    return _last_ocr_debug.get(label, {})
 
 
 def grab_fullscreen():
@@ -40,7 +60,7 @@ def preprocess_for_tesseract(image: Image.Image):
 
 
 # 通用 OCR 读取函数
-def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST):
+def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST, label="unknown"):
     img = crop_region(frame, region) if frame is not None else ImageGrab.grab(bbox=region)
     processed = preprocess_for_tesseract(img)
     config = f"--psm {TESSERACT_PSM} --oem {TESSERACT_OEM} -c tessedit_char_whitelist={whitelist}"
@@ -48,6 +68,14 @@ def read_number_raw(region, frame=None, whitelist=NUMERIC_WHITELIST):
 
     text = text.replace("O", "0").replace("o", "0")
     digits = "".join(c for c in text if c.isdigit())
+
+    _record_ocr_debug(
+        label,
+        raw_text=text,
+        digits=digits,
+        region=region,
+        whitelist=whitelist,
+    )
 
     return digits if digits else None
 
@@ -58,13 +86,15 @@ last_speed_time = 0
 
 def read_speed(region, frame=None):
     global last_speed, last_speed_time
-    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST)
+    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST, label="speed")
 
     try:
         value = float(raw_text) if raw_text is not None else None
-    except:
+    except Exception:
+        _record_ocr_debug("speed", parsed_value=None, note="parse_error")
         return None
     if value is None:
+        _record_ocr_debug("speed", parsed_value=None, note="no_digits")
         return None
 
     now = time.time()
@@ -72,24 +102,31 @@ def read_speed(region, frame=None):
     # Correction logic for probable OCR truncation
     if last_speed is not None and last_speed >= 60 and value < 10 and (now - last_speed_time) < 1.5:
         corrected = float(f"7{int(value)}")
+        _record_ocr_debug("speed", note=f"corrected_from_{value}_to_{corrected}")
         value = corrected
 
     if not (0 <= value <= 120):
+        _record_ocr_debug("speed", parsed_value=value, note="out_of_range")
         return None
 
     last_speed = value
     last_speed_time = now
+    _record_ocr_debug("speed", parsed_value=value, note="ok")
     return value
 
 
 def read_distance(region, frame=None):
-    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST)
+    raw_text = read_number_raw(region, frame=frame, whitelist=NUMERIC_WHITELIST, label="distance")
     if raw_text is None:
+        _record_ocr_debug("distance", parsed_value=None, note="no_digits")
         return None
     try:
-        return int(raw_text) / 100
+        value = int(raw_text) / 100
     except ValueError:
+        _record_ocr_debug("distance", parsed_value=None, note="parse_error")
         return None
+    _record_ocr_debug("distance", parsed_value=value, note="ok")
+    return value
 
 
 def should_press_door_keys(frame=None):

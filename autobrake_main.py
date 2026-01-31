@@ -9,6 +9,7 @@ from ocr_reader import (
     read_distance,
     read_speed,
     should_press_door_keys,
+    get_last_ocr_debug,
 )
 
 from curve_calc import braking_distance
@@ -22,6 +23,7 @@ from config import (
     STOPPED_W_PRESS_DURATION,
     DOOR_KEY_PRESS_DURATION,
     LOOP_INTERVAL,
+    DEBUG_OCR,
 )
 
 # State
@@ -31,6 +33,7 @@ last_trigger_time = 0
 last_keypress_time = 0
 last_nonzero_speed_time = time.time()
 last_w_press_time = 0
+last_debug_time = 0
 
 
 def on_press(key):
@@ -103,11 +106,36 @@ try:
 
         # Distance check
         distance_miles = read_distance(REGION_MILES, frame=frame)
+        if DEBUG_OCR and (now - last_debug_time) > 1.0:
+            speed_debug = get_last_ocr_debug("speed")
+            distance_debug = get_last_ocr_debug("distance")
+            print()
+            print(
+                "[DEBUG] speed OCR raw={raw!r} digits={digits!r} parsed={parsed} note={note} region={region}".format(
+                    raw=speed_debug.get("raw_text"),
+                    digits=speed_debug.get("digits"),
+                    parsed=speed_debug.get("parsed_value"),
+                    note=speed_debug.get("note"),
+                    region=speed_debug.get("region"),
+                )
+            )
+            print(
+                "[DEBUG] dist OCR raw={raw!r} digits={digits!r} parsed={parsed} note={note} region={region}".format(
+                    raw=distance_debug.get("raw_text"),
+                    digits=distance_debug.get("digits"),
+                    parsed=distance_debug.get("parsed_value"),
+                    note=distance_debug.get("note"),
+                    region=distance_debug.get("region"),
+                )
+            )
+            last_debug_time = now
         if distance_miles is None:
             time.sleep(LOOP_INTERVAL)
             continue
 
         required_miles = braking_distance(speed_mph)
+        if DEBUG_OCR and (now - last_debug_time) <= 0.01:
+            print(f"[DEBUG] req distance={required_miles:.4f} mi for speed={speed_mph:.2f} mph")
 
         status_line = (
             f"Speed: {speed_mph:5.1f} mph | Dist: {distance_miles:6.3f} mi | "

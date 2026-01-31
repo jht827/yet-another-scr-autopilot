@@ -31,3 +31,6 @@ LOOP_INTERVAL = 0.2
 
 # Select Destination automation
 SELECT_DESTINATION_INTERVAL = 60
+
+# Debug logging
+DEBUG_OCR = True

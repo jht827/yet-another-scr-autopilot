@@ -13,6 +13,7 @@ from scr_autopilot.vision.screen_capture import (
     NormalizedRoi,
     ScreenGrabber,
     WindowRegion,
+    find_window_region,
     roi_from_normalized,
     roi_to_normalized,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "NormalizedRoi",
     "ScreenGrabber",
     "WindowRegion",
+    "find_window_region",
     "roi_from_normalized",
     "roi_to_normalized",
     "RoiSelection",

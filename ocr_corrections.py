@@ -1,13 +1,11 @@
 """OCR correction helpers for speed and distance."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import ocr_config
 
-_DIGIT_CONFUSIONS = {
-    "2": ("7",),
-}
+_DIGIT_CONFUSIONS: dict[str, tuple[str, ...]] = {}
 
 
 @dataclass
@@ -15,6 +13,7 @@ class DistanceState:
     last_miles_value: int | None = None
     last_prediction: float | None = None
     miles_reject_streak: int = 0
+    recent_raw_miles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -116,6 +115,18 @@ def _best_distance_candidate(digits: str, prediction: float, tolerance: float) -
     return best_value
 
 
+def _should_fix_07x_to_02x(miles_digits: str, state: DistanceState) -> bool:
+    if len(miles_digits) != ocr_config.MAX_DISTANCE_DIGITS:
+        return False
+    if not miles_digits.startswith("07"):
+        return False
+    lookback = ocr_config.DISTANCE_07X_FIX_LOOKBACK
+    required = ocr_config.DISTANCE_03X_REQUIRED
+    recent = state.recent_raw_miles[-lookback:] if lookback > 0 else []
+    count_03x = sum(1 for digits in recent if len(digits) == 3 and digits.startswith("03"))
+    return count_03x >= required
+
+
 def apply_distance_correction(
     raw_miles: str,
     state: DistanceState,
@@ -124,7 +135,13 @@ def apply_distance_correction(
     allow_reset: bool,
 ) -> int | None:
     """Use speed integration to validate OCR distance at high speed."""
-    miles_digits = clamp_distance_digits(raw_miles)
+    raw_digits = clamp_distance_digits(raw_miles)
+    miles_digits = raw_digits
+    if _should_fix_07x_to_02x(miles_digits, state):
+        miles_digits = f"02{miles_digits[2]}"
+    state.recent_raw_miles.append(raw_digits)
+    if len(state.recent_raw_miles) > ocr_config.DISTANCE_07X_FIX_LOOKBACK:
+        state.recent_raw_miles = state.recent_raw_miles[-ocr_config.DISTANCE_07X_FIX_LOOKBACK :]
     miles_value = _parse_int(miles_digits)
     if miles_value is None:
         return None

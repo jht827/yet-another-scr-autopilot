@@ -1,9 +1,11 @@
 {
+  "window_title": "Roblox",
+  "window_bbox": null,
   "poll_hz": 2,
   "watch_fields": ["signal_id", "next_stop", "platform"],
   "fields": {
     "speed": {
-      "roi": [1202, 780, 1265, 809],
+      "roi": [2144, 1315, 2205, 1340],
       "psm": 7,
       "whitelist": "0123456789.",
       "scale": 2,

@@ -17,12 +17,18 @@ from ocr_corrections import DistanceState, SpeedState, apply_distance_correction
 class Regions:
     speed: Tuple[int, int, int, int]
     miles: Tuple[int, int, int, int]
+    next_signal_number: Tuple[int, int, int, int]
+    next_signal_distance: Tuple[int, int, int, int]
+    platform_number: Tuple[int, int, int, int]
+    route_number: Tuple[int, int, int, int]
+    next_station: Tuple[int, int, int, int]
 
 
 @dataclass
 class CorrectionState:
     speed: SpeedState
     distance: DistanceState
+    next_signal_distance: DistanceState
     stop_start: float | None = None
 
 
@@ -30,11 +36,17 @@ class CorrectionState:
 class StatusState:
     last_speed_text: str | None = None
     last_miles_text: str | None = None
+    last_next_signal_number_text: str | None = None
+    last_next_signal_distance_text: str | None = None
+    last_platform_number_text: str | None = None
+    last_route_number_text: str | None = None
+    last_next_station_text: str | None = None
     last_status: float = 0.0
     last_update: float = 0.0
     fps_timer: float = 0.0
     frame_count: int = 0
     fps: float = 0.0
+    last_slow_read: float = 0.0
 
 
 def _apply_ocr_settings() -> None:
@@ -81,6 +93,20 @@ def _read_digits(image: Image.Image) -> str:
     return "".join(ch for ch in text if ch.isdigit())
 
 
+def _read_text(image: Image.Image, whitelist: str | None, allow_spaces: bool) -> str:
+    config = f"--psm {ocr_config.TESSERACT_PSM}"
+    if whitelist:
+        config = f"{config} -c tessedit_char_whitelist={whitelist}"
+    text = pytesseract.image_to_string(image, config=config).upper()
+    cleaned = " ".join(text.split())
+    if not whitelist and not allow_spaces:
+        return cleaned
+    allowed = set(whitelist or "")
+    if allow_spaces:
+        allowed.add(" ")
+    return "".join(ch for ch in cleaned if ch in allowed)
+
+
 def _is_stopped(speed_value: int | None) -> bool:
     # Treat very low speeds as a stop for distance reset logic.
     # This threshold smooths small OCR jitters when the vehicle is idle.
@@ -95,11 +121,26 @@ def _grab_full_screen(sct: mss.mss) -> Image.Image:
     return Image.frombytes("RGB", (shot.width, shot.height), shot.rgb)
 
 
-def _print_status(speed: str, miles: str, fps: float) -> None:
+def _print_status(
+    speed: str,
+    miles: str,
+    next_signal_number: str,
+    next_signal_distance: str,
+    platform_number: str,
+    route_number: str,
+    next_station: str,
+    fps: float,
+) -> None:
     # Emit a compact status line with OCR values and current FPS.
     # Use flush=True so log consumers see updates immediately.
     timestamp = time.strftime("%H:%M:%S")
-    print(f"[{timestamp}] speed={speed or '-'} miles={miles or '-'} fps={fps:.1f}", flush=True)
+    print(
+        f"[{timestamp}] speed={speed or '-'} miles={miles or '-'} "
+        f"signal={next_signal_number or '-'} signal_dist={next_signal_distance or '-'} "
+        f"platform={platform_number or '-'} route={route_number or '-'} "
+        f"next_station={next_station or '-'} fps={fps:.1f}",
+        flush=True,
+    )
 
 
 def _read_regions(full: Image.Image, regions: Regions) -> tuple[str, str]:
@@ -130,6 +171,10 @@ def _format_output(speed_value: int | None, miles_value: int | None) -> tuple[st
     return speed, miles
 
 
+def _format_distance(value: int | None) -> str:
+    return f"{value:0{ocr_config.MAX_DISTANCE_DIGITS}d}" if value is not None else ""
+
+
 def _update_fps(state: StatusState, now: float) -> None:
     # Update FPS once per second using a rolling frame counter.
     # This avoids per-frame prints while still exposing throughput.
@@ -145,11 +190,24 @@ def _should_print(
     state: StatusState,
     speed: str,
     miles: str,
+    next_signal_number: str,
+    next_signal_distance: str,
+    platform_number: str,
+    route_number: str,
+    next_station: str,
     now: float,
 ) -> bool:
     # Decide whether to print based on change detection or time interval.
     # This keeps the log quieter while still emitting periodic status lines.
-    changed = speed != state.last_speed_text or miles != state.last_miles_text
+    changed = (
+        speed != state.last_speed_text
+        or miles != state.last_miles_text
+        or next_signal_number != state.last_next_signal_number_text
+        or next_signal_distance != state.last_next_signal_distance_text
+        or platform_number != state.last_platform_number_text
+        or route_number != state.last_route_number_text
+        or next_station != state.last_next_station_text
+    )
     time_since_status = now - state.last_status
     return (
         (not ocr_config.PRINT_ON_CHANGE_ONLY)
@@ -168,10 +226,22 @@ def _allow_distance_reset(state: CorrectionState, now: float) -> bool:
 
 def main() -> None:
     _apply_ocr_settings()
-    regions = Regions(speed=ocr_config.REGION_SPEED, miles=ocr_config.REGION_MILES)
+    regions = Regions(
+        speed=ocr_config.REGION_SPEED,
+        miles=ocr_config.REGION_MILES,
+        next_signal_number=ocr_config.REGION_NEXT_SIGNAL_NUMBER,
+        next_signal_distance=ocr_config.REGION_NEXT_SIGNAL_DISTANCE,
+        platform_number=ocr_config.REGION_PLATFORM_NUMBER,
+        route_number=ocr_config.REGION_ROUTE_NUMBER,
+        next_station=ocr_config.REGION_NEXT_STATION,
+    )
 
     target_frame_time = 1.0 / max(1, ocr_config.TARGET_FPS)
-    correction_state = CorrectionState(speed=SpeedState(), distance=DistanceState())
+    correction_state = CorrectionState(
+        speed=SpeedState(),
+        distance=DistanceState(),
+        next_signal_distance=DistanceState(),
+    )
     status_state = StatusState(last_update=time.perf_counter(), fps_timer=time.perf_counter())
 
     with mss.mss() as sct:
@@ -181,6 +251,14 @@ def main() -> None:
             full = _grab_full_screen(sct)
 
             raw_speed, raw_miles = _read_regions(full, regions)
+            raw_next_signal_number = _read_text(
+                _preprocess(_crop(full, regions.next_signal_number)),
+                whitelist=ocr_config.ALPHANUM_WHITELIST,
+                allow_spaces=False,
+            )
+            raw_next_signal_distance = _read_digits(
+                _preprocess(_crop(full, regions.next_signal_distance))
+            )
 
             now = time.perf_counter()
             # Clamp delta_t so corrections don't explode on long pauses.
@@ -197,21 +275,75 @@ def main() -> None:
                 delta_t,
                 allow_reset,
             )
+            next_signal_distance_value = apply_distance_correction(
+                raw_next_signal_distance,
+                correction_state.next_signal_distance,
+                speed_value,
+                delta_t,
+                allow_reset,
+            )
 
             if speed_value is not None:
                 correction_state.speed.last_speed_value = speed_value
             if miles_value is not None:
                 correction_state.distance.last_miles_value = miles_value
+            if next_signal_distance_value is not None:
+                correction_state.next_signal_distance.last_miles_value = next_signal_distance_value
 
             speed, miles = _format_output(speed_value, miles_value)
+            next_signal_number = raw_next_signal_number
+            next_signal_distance = _format_distance(next_signal_distance_value)
+
+            if now - status_state.last_slow_read >= ocr_config.SLOW_READ_INTERVAL:
+                status_state.last_slow_read = now
+                raw_platform_number = _read_digits(
+                    _preprocess(_crop(full, regions.platform_number))
+                )
+                raw_route_number = _read_digits(_preprocess(_crop(full, regions.route_number)))
+                raw_next_station = _read_text(
+                    _preprocess(_crop(full, regions.next_station)),
+                    whitelist=f"{ocr_config.ALPHANUM_WHITELIST} ",
+                    allow_spaces=True,
+                )
+                status_state.last_platform_number_text = raw_platform_number
+                status_state.last_route_number_text = raw_route_number
+                status_state.last_next_station_text = raw_next_station
+
+            platform_number = status_state.last_platform_number_text or ""
+            route_number = status_state.last_route_number_text or ""
+            next_station = status_state.last_next_station_text or ""
             _update_fps(status_state, now)
 
-            if _should_print(status_state, speed, miles, now):
+            if _should_print(
+                status_state,
+                speed,
+                miles,
+                next_signal_number,
+                next_signal_distance,
+                platform_number,
+                route_number,
+                next_station,
+                now,
+            ):
                 # Cache last printed values for change detection.
-                _print_status(speed, miles, status_state.fps)
+                _print_status(
+                    speed,
+                    miles,
+                    next_signal_number,
+                    next_signal_distance,
+                    platform_number,
+                    route_number,
+                    next_station,
+                    status_state.fps,
+                )
                 status_state.last_status = now
                 status_state.last_speed_text = speed
                 status_state.last_miles_text = miles
+                status_state.last_next_signal_number_text = next_signal_number
+                status_state.last_next_signal_distance_text = next_signal_distance
+                status_state.last_platform_number_text = platform_number
+                status_state.last_route_number_text = route_number
+                status_state.last_next_station_text = next_station
 
             loop_end = time.perf_counter()
             # Sleep only if we're faster than the target FPS.

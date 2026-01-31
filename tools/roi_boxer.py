@@ -1,48 +1,21 @@
 #!/usr/bin/env python3
-"""Interactively select ROI boxes from the Roblox window and save to config."""
+"""Interactively select ROI boxes from the screen and save to config."""
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any
 
 from PIL import ImageGrab
 
 
-def _load_quartz() -> Any | None:
-    if importlib.util.find_spec("Quartz") is None:
-        return None
-    return importlib.import_module("Quartz")
-
-
-def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
-    quartz = _load_quartz()
-    if quartz is None:
-        return None
-    options = quartz.kCGWindowListOptionOnScreenOnly | quartz.kCGWindowListExcludeDesktopElements
-    window_list = quartz.CGWindowListCopyWindowInfo(options, quartz.kCGNullWindowID)
-    for window in window_list:
-        window_name = window.get("kCGWindowName", "") or ""
-        owner_name = window.get("kCGWindowOwnerName", "") or ""
-        if window_title.lower() in window_name.lower() or window_title.lower() in owner_name.lower():
-            bounds = window.get("kCGWindowBounds", {})
-            left = int(bounds.get("X", 0))
-            top = int(bounds.get("Y", 0))
-            width = int(bounds.get("Width", 0))
-            height = int(bounds.get("Height", 0))
-            return (left, top, left + width, top + height)
-    raise RuntimeError(f"No window found with title containing '{window_title}'.")
-
-
-def _load_config(path: Path) -> dict[str, Any]:
+def _load_config(path: Path) -> dict[str, object]:
     return json.loads(path.read_text())
 
 
-def _save_config(path: Path, config: dict[str, Any]) -> None:
+def _save_config(path: Path, config: dict[str, object]) -> None:
     path.write_text(json.dumps(config, indent=2, sort_keys=True))
 
 
@@ -59,17 +32,7 @@ class RoiBoxer:
     def __init__(self, config_path: Path) -> None:
         self.config_path = config_path
         self.config = _load_config(config_path)
-        self.window_title = self.config.get("window_title", "Roblox")
-        self.window_bbox = _get_window_bbox(self.window_title)
-        if self.window_bbox is None:
-            self.window_bbox = self._fallback_bbox()
-
-    def _fallback_bbox(self) -> tuple[int, int, int, int]:
-        window_bbox = self.config.get("window_bbox")
-        if window_bbox:
-            return tuple(window_bbox)
-        print("Warning: window lookup unavailable. Using fullscreen coordinates.")
-        return _get_fullscreen_bbox()
+        self.screen_bbox = _get_fullscreen_bbox()
 
     def run_gui(self) -> None:
         tkinter = importlib.import_module("tkinter")
@@ -77,7 +40,7 @@ class RoiBoxer:
         simpledialog = importlib.import_module("tkinter.simpledialog")
         image_tk = importlib.import_module("PIL.ImageTk")
 
-        image = ImageGrab.grab(bbox=self.window_bbox)
+        image = ImageGrab.grab(bbox=self.screen_bbox)
         photo = image_tk.PhotoImage(image)
 
         root = tkinter.Tk()
@@ -147,9 +110,9 @@ class RoiBoxer:
 
     def run_cli(self, snapshot_path: Path) -> None:
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        image = ImageGrab.grab(bbox=self.window_bbox)
+        image = ImageGrab.grab(bbox=self.screen_bbox)
         image.save(snapshot_path)
-        print(f"Saved window snapshot to {snapshot_path}")
+        print(f"Saved screen snapshot to {snapshot_path}")
         print("Open the image and enter ROI coords as: left top right bottom")
         field_name = input("Field name to update: ").strip()
         coords = input("ROI coords (l t r b): ").strip().split()
@@ -172,7 +135,7 @@ class RoiBoxer:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Select ROIs from the Roblox window and save to config.",
+        description="Select ROIs from the screen and save to config.",
     )
     parser.add_argument(
         "--config",

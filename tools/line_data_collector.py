@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib
-import importlib.util
 import json
 import time
 from collections import deque
@@ -35,8 +33,6 @@ class FieldConfig:
 @dataclass
 class CollectorConfig:
     fields: dict[str, FieldConfig] = field(default_factory=dict)
-    window_title: str = "Roblox"
-    window_bbox: tuple[int, int, int, int] | None = None
     poll_hz: float = 2.0
     watch_fields: tuple[str, ...] = ("signal_id", "next_stop", "platform")
 
@@ -54,12 +50,8 @@ def _load_config(path: Path) -> CollectorConfig:
             threshold=cfg.get("threshold"),
             invert=bool(cfg.get("invert", False)),
         )
-    window_bbox = raw.get("window_bbox")
-    window_bbox_tuple = tuple(window_bbox) if window_bbox else None
     return CollectorConfig(
         fields=fields,
-        window_title=raw.get("window_title", "Roblox"),
-        window_bbox=window_bbox_tuple,
         poll_hz=float(raw.get("poll_hz", 2.0)),
         watch_fields=tuple(raw.get("watch_fields", ["signal_id", "next_stop", "platform"])),
     )
@@ -88,65 +80,11 @@ def _ocr(image: Image.Image, cfg: FieldConfig) -> str:
     return text.strip()
 
 
-def _load_quartz() -> Any | None:
-    if importlib.util.find_spec("Quartz") is None:
-        return None
-    return importlib.import_module("Quartz")
-
-
-def _get_window_bbox(window_title: str) -> tuple[int, int, int, int] | None:
-    quartz = _load_quartz()
-    if quartz is None:
-        return None
-    options = quartz.kCGWindowListOptionOnScreenOnly | quartz.kCGWindowListExcludeDesktopElements
-    window_list = quartz.CGWindowListCopyWindowInfo(options, quartz.kCGNullWindowID)
-    for window in window_list:
-        window_name = window.get("kCGWindowName", "") or ""
-        owner_name = window.get("kCGWindowOwnerName", "") or ""
-        if window_title.lower() in window_name.lower() or window_title.lower() in owner_name.lower():
-            bounds = window.get("kCGWindowBounds", {})
-            left = int(bounds.get("X", 0))
-            top = int(bounds.get("Y", 0))
-            width = int(bounds.get("Width", 0))
-            height = int(bounds.get("Height", 0))
-            return (left, top, left + width, top + height)
-    raise RuntimeError(f"No window found with title containing '{window_title}'.")
-
-
-def _capture_field(cfg: FieldConfig, window_bbox: tuple[int, int, int, int] | None) -> str:
+def _capture_field(cfg: FieldConfig) -> str:
     x1, y1, x2, y2 = cfg.roi
-    if window_bbox is None:
-        image = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-    else:
-        left, top, _, _ = window_bbox
-        image = ImageGrab.grab(bbox=(left + x1, top + y1, left + x2, top + y2))
+    image = ImageGrab.grab(bbox=(x1, y1, x2, y2))
     image = _preprocess(image, cfg)
     return _ocr(image, cfg)
-
-
-def _prompt_fullscreen_fallback(reason: str) -> None:
-    print(reason)
-    try:
-        response = input("Fallback to full screen coordinates? [y/N]: ").strip().lower()
-    except EOFError as exc:
-        raise RuntimeError("Window capture unavailable and no fallback confirmation received.") from exc
-    if response not in {"y", "yes"}:
-        raise RuntimeError("Aborted line data collection (fullscreen fallback declined).")
-
-
-def _resolve_window_bbox(config: CollectorConfig) -> tuple[int, int, int, int] | None:
-    if config.window_bbox:
-        return config.window_bbox
-    try:
-        window_bbox = _get_window_bbox(config.window_title)
-    except RuntimeError as exc:
-        _prompt_fullscreen_fallback(str(exc))
-        return None
-    if window_bbox is None:
-        _prompt_fullscreen_fallback(
-            "Window lookup unavailable (Quartz backend missing).",
-        )
-    return window_bbox
 
 
 def _parse_float(value: str) -> float | None:
@@ -193,12 +131,6 @@ def collect(config_path: Path, output_path: Path) -> None:
     queue_lock = Lock()
     platform_open = False
 
-    window_bbox = _resolve_window_bbox(config)
-    if window_bbox is None:
-        print(
-            "Warning: Using absolute screen coordinates.",
-        )
-
     def _on_key_press(key: keyboard.Key | keyboard.KeyCode) -> None:
         try:
             char = key.char
@@ -244,7 +176,7 @@ def collect(config_path: Path, output_path: Path) -> None:
 
                 values: dict[str, str] = {}
                 for name, field_cfg in config.fields.items():
-                    values[name] = _capture_field(field_cfg, window_bbox)
+                    values[name] = _capture_field(field_cfg)
 
                 speed_mph = _parse_float(values.get("speed", ""))
                 if speed_mph is None:

@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from typing import Optional
 
@@ -15,9 +16,13 @@ except ImportError as exc:  # pragma: no cover - platform dependency
 
 
 def find_window_region(title_hint: str) -> WindowRegion:
+    current_pid = os.getpid()
     options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
     window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
     for window in window_list:
+        owner_pid = window.get("kCGWindowOwnerPID")
+        if owner_pid == current_pid:
+            continue
         window_title = window.get("kCGWindowName", "") or ""
         owner_name = window.get("kCGWindowOwnerName", "") or ""
         if title_hint.lower() in window_title.lower() or title_hint.lower() in owner_name.lower():

@@ -83,8 +83,8 @@ def segment_digits(binary: np.ndarray) -> Iterable[np.ndarray]:
     if not contours:
         return []
     height, width = binary.shape[:2]
-    min_height = max(6, int(height * 0.4))
-    min_area = int(height * width * 0.01)
+    min_height = max(4, int(height * 0.25))
+    min_area = int(height * width * 0.003)
     boxes = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
@@ -114,17 +114,48 @@ def match_digit(digit: np.ndarray, templates: Dict[str, np.ndarray]) -> Tuple[st
 
 
 def decode_roi(roi: np.ndarray, templates: Dict[str, np.ndarray]) -> Tuple[str, float]:
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     processed = preprocess_for_ocr(roi)
-    digits = segment_digits(processed)
-    if not digits:
-        return "", 0.0
-    labels: list[str] = []
-    scores: list[float] = []
-    for digit in digits:
-        label, score = match_digit(digit, templates)
-        labels.append(label)
-        scores.append(score)
-    return "".join(labels), float(min(scores)) if scores else 0.0
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, otsu_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    variants = (processed, cv2.bitwise_not(processed), otsu, otsu_inv)
+    best_label = ""
+    best_score = 0.0
+    for candidate in variants:
+        digits = segment_digits(candidate)
+        if not digits:
+            label, score = match_digit(candidate, templates)
+            if score > best_score:
+                best_label = label
+                best_score = score
+            continue
+        labels: list[str] = []
+        scores: list[float] = []
+        for digit in digits:
+            label, score = match_digit(digit, templates)
+            labels.append(label)
+            scores.append(score)
+        if scores and min(scores) > best_score:
+            best_label = "".join(labels)
+            best_score = float(min(scores))
+    return best_label, best_score
+
+
+def dump_roi_variants(
+    dump_dir: Path,
+    label: str,
+    roi: np.ndarray,
+) -> None:
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    processed = preprocess_for_ocr(roi)
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, otsu_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    cv2.imwrite(str(dump_dir / f"{label}_raw.png"), roi)
+    cv2.imwrite(str(dump_dir / f"{label}_processed.png"), processed)
+    cv2.imwrite(str(dump_dir / f"{label}_processed_inv.png"), cv2.bitwise_not(processed))
+    cv2.imwrite(str(dump_dir / f"{label}_otsu.png"), otsu)
+    cv2.imwrite(str(dump_dir / f"{label}_otsu_inv.png"), otsu_inv)
 
 
 def format_value(label: str, score: float, threshold: float) -> str:
@@ -136,8 +167,8 @@ def format_value(label: str, score: float, threshold: float) -> str:
 def load_template_dir(path: Path, label: str) -> Dict[str, np.ndarray]:
     templates = load_templates(path)
     if not templates:
-        raise RuntimeError(
-            f"No templates found for {label} in {path}. "
+        print(
+            f"Warning: no templates found for {label} in {path}. "
             "Add digit PNGs (0.png-9.png) or pass a custom path."
         )
     return templates
@@ -187,15 +218,26 @@ def main() -> None:
         default=DEFAULT_TEMPLATE_DIRS["distance"],
         help=f"Template folder for distance digits (default: {DEFAULT_TEMPLATE_DIRS['distance']}).",
     )
+    parser.add_argument(
+        "--dump-rois",
+        type=Path,
+        help="Optional folder to dump ROI images (raw + processed variants) on first frame.",
+    )
     args = parser.parse_args()
 
     speed_templates = load_template_dir(args.speed_templates, "speed")
     limit_templates = load_template_dir(args.limit_templates, "limit")
     distance_templates = load_template_dir(args.distance_templates, "distance")
+    if not speed_templates and not limit_templates and not distance_templates:
+        print(
+            "No templates loaded. Use --dump-rois to capture HUD digits and build templates, "
+            "or provide template folders with digit PNGs."
+        )
 
     region = resolve_region(args)
     grabber = ScreenGrabber(lambda: region)
     grabber.start()
+    dumped = False
     try:
         while True:
             sample = grabber.read_latest()
@@ -206,6 +248,14 @@ def main() -> None:
             speed_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.speed))
             limit_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.limit))
             distance_roi = clamp_roi(frame, roi_from_normalized(region, DEFAULT_ROIS.distance))
+            if args.dump_rois and not dumped:
+                if speed_roi is not None:
+                    dump_roi_variants(args.dump_rois, "speed", speed_roi)
+                if limit_roi is not None:
+                    dump_roi_variants(args.dump_rois, "limit", limit_roi)
+                if distance_roi is not None:
+                    dump_roi_variants(args.dump_rois, "distance", distance_roi)
+                dumped = True
 
             speed_label, speed_score = ("", 0.0)
             limit_label, limit_score = ("", 0.0)

@@ -1,0 +1,9 @@
+timestamp,event_type,value,distance_m,speed_mph,speed_limit_mph,distance_to_next_station,signal_id,next_stop,platform
+2026-01-31T09:41:32.955885+00:00,platform,2,0.00,,,,,,2
+2026-01-31T09:41:48.355907+00:00,platform,i,0.00,,,,,,i
+2026-01-31T09:41:50.053720+00:00,platform,a,0.00,,,,,,a
+2026-01-31T09:41:51.754810+00:00,platform,3,0.00,,,,,,3
+2026-01-31T09:41:53.454336+00:00,platform,gE,0.00,,,,,,gE
+2026-01-31T09:41:58.554787+00:00,platform,i,0.00,,,,,,i
+2026-01-31T09:42:03.655203+00:00,platform,e,0.00,,,,,,e
+2026-01-31T09:42:05.356731+00:00,platform,lo,0.00,.,,,,,lo

@@ -1,0 +1,111 @@
+import argparse
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+import cv2
+
+from scr_autopilot.config import load_config
+from scr_autopilot.hud_config import PixelRoi, WINDOW_TITLE, format_roi
+from scr_autopilot.vision import ScreenGrabber, WindowRegion, select_roi
+
+try:
+    import Quartz
+except ImportError as exc:  # pragma: no cover - platform dependency
+    raise ImportError(
+        "Quartz is required on macOS. Install pyobjc with pip install pyobjc."
+    ) from exc
+
+
+def find_window_region(title_hint: str) -> WindowRegion:
+    current_pid = os.getpid()
+    options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+    window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+    for window in window_list:
+        owner_pid = window.get("kCGWindowOwnerPID")
+        if owner_pid == current_pid:
+            continue
+        window_title = window.get("kCGWindowName", "") or ""
+        owner_name = window.get("kCGWindowOwnerName", "") or ""
+        if title_hint.lower() in window_title.lower() or title_hint.lower() in owner_name.lower():
+            bounds = window.get("kCGWindowBounds", {})
+            return WindowRegion(
+                left=int(bounds.get("X", 0)),
+                top=int(bounds.get("Y", 0)),
+                width=int(bounds.get("Width", 0)),
+                height=int(bounds.get("Height", 0)),
+            )
+    raise RuntimeError(f"Window matching '{title_hint}' not found.")
+
+
+def region_provider(title_hint: str) -> WindowRegion:
+    return find_window_region(title_hint)
+
+
+def capture_loop(title_hint: str, show_preview: bool) -> None:
+    grabber = ScreenGrabber(lambda: region_provider(title_hint))
+    grabber.start()
+    if show_preview:
+        cv2.namedWindow("Roblox Capture", cv2.WINDOW_NORMAL)
+    
+    print(f"Targeting window: {title_hint}")
+    print("Controls: 'b' to select ROI, 'q' to quit.")
+    
+    while True:
+        sample = grabber.read_latest()
+        if sample is None:
+            time.sleep(0.01)
+            continue
+        
+        frame = sample.frame
+        if show_preview:
+            cv2.imshow("Roblox Capture", frame)
+        
+        key = cv2.waitKey(1) & 0xFF
+        
+        if key == ord("b"):
+            # This opens the ROI selection UI
+            selection = select_roi(frame, region_provider(title_hint))
+            x, y, w, h = selection.roi
+            
+            # Calculate coordinates for the format: x1, y1, x2, y2
+            x1, y1 = x, y
+            x2, y2 = x + w, y + h
+            
+            # Print the exact format requested
+            print(f"{x1}, {y1}, {x2}, {y2}")
+            
+        elif key == ord("q"):
+            break
+            
+        time.sleep(0.005)
+        
+    grabber.stop()
+    cv2.destroyAllWindows()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Capture Roblox window and select HUD ROI.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the central scr_autopilot.toml config file.",
+    )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Window title/owner hint to match.",
+    )
+    parser.add_argument("--no-preview", action="store_true", help="Disable live preview window.")
+    args = parser.parse_args()
+    
+    config = load_config(Path(args.config) if args.config else None)
+    title_hint = args.title or config.window.title or WINDOW_TITLE
+    
+    capture_loop(title_hint, show_preview=not args.no_preview)
+
+
+if __name__ == "__main__":
+    main()

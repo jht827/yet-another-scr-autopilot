@@ -5,40 +5,40 @@
   "watch_fields": ["signal_id", "next_stop", "platform"],
   "fields": {
     "speed": {
-      "roi": [804, 1350, 860, 1379],
+      "roi": [1202, 780, 1265, 809],
       "psm": 7,
       "whitelist": "0123456789.",
       "scale": 2,
       "threshold": 160
     },
     "speed_limit": {
-      "roi": [900, 1350, 960, 1379],
+      "roi": [1210, 844, 1257, 866],
       "psm": 7,
       "whitelist": "0123456789.",
       "scale": 2,
       "threshold": 160
     },
     "signal_id": {
-      "roi": [1020, 1330, 1120, 1365],
+      "roi": [265, 844, 334, 860],
       "psm": 7,
       "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
       "scale": 2,
       "threshold": 160
     },
     "next_stop": {
-      "roi": [1200, 60, 1500, 95],
+      "roi": [19, 820, 226, 838],
       "psm": 7,
       "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ",
       "scale": 2
     },
     "platform": {
-      "roi": [1200, 95, 1500, 130],
+      "roi": [91, 867, 126, 886],
       "psm": 7,
       "whitelist": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ",
       "scale": 2
     },
     "distance_to_next_station": {
-      "roi": [1168, 1388, 1225, 1409],
+      "roi": [179, 842, 223, 862],
       "psm": 7,
       "whitelist": "0123456789.",
       "scale": 2,
